@@ -44,7 +44,7 @@ from fastmcp import FastMCP
 # Import tool functions
 from tools.market_data import get_stock_price, get_intraday, get_market_overview
 from tools.fundamentals import get_company_info, get_financial_ratios, get_income_statement, get_balance_sheet
-from tools.screening import screen_stocks, get_index_members, get_stocks_by_industry, get_industry_list, get_money_flow, get_market_sentiment
+from tools.screening import screen_stocks, get_index_members, get_stocks_by_industry, get_industry_list, get_money_flow, get_market_sentiment, get_screener_criteria, filter_stocks
 from tools.technical import get_technical_indicators
 from tools.news import get_news, get_trending_keywords
 from tools.portfolio import compare_stocks, get_correlation
@@ -78,6 +78,8 @@ mcp.tool()(get_stocks_by_industry)
 mcp.tool()(get_industry_list)
 mcp.tool()(get_money_flow)
 mcp.tool()(get_market_sentiment)
+mcp.tool()(get_screener_criteria)
+mcp.tool()(filter_stocks)
 
 # ── Group 4: Technical Analysis ──────────────────────────────────────────────
 mcp.tool()(get_technical_indicators)

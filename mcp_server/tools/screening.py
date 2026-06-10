@@ -125,6 +125,90 @@ def get_market_sentiment() -> str:
         return handle_vnstock_error(e, "get_market_sentiment")
 
 
+def get_screener_criteria(lang: str = "vi") -> str:
+    """
+    List all available stock screener filter criteria (field names and categories).
+    Use this first to discover valid field names for filter_stocks().
+
+    Args:
+        lang: Language for criteria descriptions — 'vi' or 'en'
+    """
+    lang = lang.lower().strip()
+    if lang not in ("vi", "en"):
+        return "[Invalid lang. Choose 'vi' or 'en']"
+    try:
+        from vnstock_data import Insights
+        df = Insights().screener.criteria(lang=lang)
+        if df is None or df.empty:
+            return "No screener criteria available."
+        return "## Screener Filter Criteria\n\n" + to_claude_text(df, mode="table", max_rows=100)
+    except Exception as e:
+        return handle_vnstock_error(e, "get_screener_criteria")
+
+
+def filter_stocks(filters_json: str = "", limit: int = 100) -> str:
+    """
+    Screen the full Vietnamese stock market with custom filter conditions
+    (P/E, ROE, RSI, market cap, sector, technical signals...).
+
+    Args:
+        filters_json: JSON array of filter conditions. Each condition:
+            {"name": "<field_name>", "conditionOptions": [...]}
+            where conditionOptions is either a value pick
+            [{"type": "value", "value": "hsx"}] or a range [{"from": 0, "to": 10}].
+            Some fields need "extraName" (e.g. {"name": "avgVolume", "extraName": "30Days", ...}).
+            Common fields: exchange (hsx/hnx/upcom), marketCap, marketPrice,
+            ttmPe, ttmPb, ttmRoe, netMargin, grossMargin,
+            revenueGrowth/npatmiGrowth (+extraName 'Yoy'),
+            rsi, macd, adx, stockStrength, rs (+extraName '3Month'),
+            avgVolume/adtv (+extraName '30Days'), dailyPriceChangePercent,
+            sectorLv1, stockTrend (e.g. 'STRONG_UPTREND').
+            Use get_screener_criteria() for the full list.
+            Empty string = no filter (full market, may return many rows).
+        limit: Maximum number of records (default 100, max 2000).
+
+        Example — HOSE stocks with P/E < 10 and ROE > 15%:
+        [{"name": "exchange", "conditionOptions": [{"type": "value", "value": "hsx"}]},
+         {"name": "ttmPe", "conditionOptions": [{"from": 0, "to": 10}]},
+         {"name": "ttmRoe", "conditionOptions": [{"from": 15, "to": 100}]}]
+    """
+    import json
+    limit = max(1, min(int(limit), 2000))
+    filters = None
+    if filters_json and filters_json.strip():
+        try:
+            filters = json.loads(filters_json)
+        except json.JSONDecodeError as e:
+            return f"[Invalid filters_json: {e}. Expected a JSON array of filter conditions.]"
+        if isinstance(filters, dict) and "filter" in filters:
+            filters = filters["filter"]
+        if not isinstance(filters, list):
+            return "[Invalid filters_json: expected a JSON array (or object with 'filter' key).]"
+    try:
+        from vnstock_data import Insights
+        s = Insights().screener
+        df = s.filter(filters=filters, limit=limit) if filters else s.filter(limit=limit)
+
+        if df is None or df.empty:
+            return "No stocks matched the given filter conditions."
+
+        # Drop verbose/internal columns to keep output compact
+        drop_cols = [
+            "match_price_time", "ema_time", "last_modified_date",
+            "company_name_en", "short_name_en", "company_name",
+            "icb_code2", "icb_code4", "industry_en",
+            "reference_price", "ceiling_price", "floor_price", "est_volume",
+        ]
+        df = df.drop(columns=[c for c in drop_cols if c in df.columns])
+
+        return (
+            f"## Screener Results ({len(df)} stocks matched)\n\n"
+            + to_claude_text(df, mode="table", max_rows=min(limit, 100))
+        )
+    except Exception as e:
+        return handle_vnstock_error(e, "filter_stocks")
+
+
 def get_index_members(index_name: str = "VN30") -> str:
     """
     Get list of stocks in a Vietnamese market index.
