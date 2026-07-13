@@ -192,3 +192,7 @@ cython_debug/
 docs/.DS_Store
 .DS_Store
 docs/.DS_Store
+
+# vnstock MCP server runtime artifacts (news cache + scratch exports)
+vnnews_cache.db
+temp_articles.csv
