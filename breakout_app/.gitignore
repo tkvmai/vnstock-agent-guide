@@ -1,0 +1,10 @@
+# Runtime data artifacts
+data/screener.db
+data/*.bak-*
+data/cache/
+data/claude_bundles/
+data/telegram_config.json
+data/claude_config.json
+data/learned_weights.json
+__pycache__/
+*.pyc

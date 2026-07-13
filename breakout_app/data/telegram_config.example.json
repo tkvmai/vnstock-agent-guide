@@ -1,0 +1,5 @@
+{
+  "bot_token": "PASTE_BOT_TOKEN_FROM_@BotFather",
+  "chat_id": ["PASTE_CHAT_ID_1", "PASTE_CHAT_ID_2"],
+  "_note": "chat_id co the la 1 id (chuoi) hoac danh sach nhieu id. Moi chat_id phai tung bam Start / nhan tin cho bot truoc."
+}
