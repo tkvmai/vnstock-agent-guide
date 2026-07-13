@@ -1,611 +1,183 @@
-# Vnstock Pipeline - Thư Viện Xử Lý Dữ Liệu Pipeline
+# Vnstock Pipeline - Tổng Quan Kiến Trúc
 
 ## Giới Thiệu
 
-`vnstock_pipeline` là thư viện Python cung cấp một framework mạnh mẽ và linh hoạt để xây dựng các **luồng xử lý dữ liệu** cho thị trường chứng khoán đặc biệt là tại Việt Nam. Thư viện bao quát toàn bộ quy trình từ bước thu thập, xác thực, chuyển đổi cho đến xuất dữ liệu thành phẩm. Với kiến trúc **mô-đun**, người dùng có thể dễ dàng tùy biến hoặc mở rộng hệ thống mà không cần can thiệp vào mã nguồn cốt lõi.
+`vnstock_pipeline` là thư viện Python cung cấp một framework mạnh mẽ và linh hoạt để xây dựng các **luồng xử lý dữ liệu** cho thị trường chứng khoán Việt Nam. Thư viện bao quát toàn bộ quy trình từ bước thu thập, xác thực, chuyển đổi cho đến xuất dữ liệu thành phẩm. Với kiến trúc **mô-đun** và **lưu trữ tập trung**, người dùng có thể dễ dàng quản lý khối lượng dữ liệu khổng lồ mà không cần cấu hình phức tạp.
 
-### Đặc Điểm Chính
+### Đặc Điểm Nổi Bật
 
-- **Kiến trúc Mô-đun**: Các thành phần cốt lõi (Fetcher, Validator, Transformer, Exporter) hoạt động hoàn toàn độc lập và có thể thêm/bớt dễ dàng (plug-and-play).
-- **Tác vụ dựng sẵn**: Cung cấp sẵn các hàm xử lý hoàn chỉnh cho dữ liệu phổ biến như OHLCV, báo cáo tài chính, dữ liệu trong phiên và bảng giá.
-- **Tự động lập lịch**: Khung điều phối Scheduler tự động chia lô và xử lý song song khối lượng lớn mã cổ phiếu.
-- **Kiểm soát lỗi**: Tích hợp cơ chế tự động thử lại, ghi nhật ký lỗi và báo cáo chi tiết quá trình thực thi.
-- **Dữ liệu thời gian thực**: Hỗ trợ WebSocket streaming với độ trễ thấp quy mô toàn thị trường, loại bỏ giới hạn tốc độ thường gặp ở REST API.
-- **Đa định dạng xuất**: Hỗ trợ xuất dữ liệu ra nhiều nền tảng lưu trữ như CSV, DuckDB, Parquet.
-- **Khả năng mở rộng**: Cung cấp các lớp cơ sở (Base Class) giúp lập trình viên dễ dàng tự tạo bộ xử lý hoặc nguồn cấp dữ liệu riêng.
-
-### Tại Sao Dùng Vnstock Pipeline?
-
-1. **Tiết Kiệm Thời Gian**: Sẵn sàng sử dụng cho các tác vụ phổ biến
-2. **Khả Năng Chịu Lỗi**: Tự động thử lại và xử lý lỗi
-3. **Khả Năng Mở Rộng**: Xử lý song song cho 1600+ mã
-4. **Tính Linh Hoạt**: Dễ tùy biến mà không cần tác động nhiều vào mã nguồn
-5. **Sẵn Sàng Sản Xuất**: Ghi nhật ký, giám sát, báo cáo
+- **Kiến trúc Lưu trữ Tập trung**: Quản lý vị trí lưu trữ, định dạng (Parquet/CSV/Excel) và cấu trúc (phẳng/phân cấp) từ một file duy nhất `pipeline.toml`.
+- **Bảo Vệ Cấu Trúc**: Các lớp Validator chạy ngầm giúp bắt lỗi dữ liệu rỗng, gián đoạn thời gian, và tự động cách ly các file làm sai lệch cấu trúc CSDL vào `.tmp/.quarantine/`.
+- **Bộ Công Cụ Quản Trị CLI**: Hỗ trợ kiểm tra, di chuyển dữ liệu, chuyển đổi định dạng và dọn dẹp dữ liệu cũ hoàn toàn bằng dòng lệnh.
+- **Tác vụ dựng sẵn**: Bao phủ đầy đủ từ Giá (OHLCV, Intraday, Bảng giá) đến Tài chính, Thống kê giao dịch, Dữ liệu Cơ sở, Tin tức và Sự kiện doanh nghiệp.
+- **Tự động lập lịch & Xử lý lỗi**: Điều phối tự động tải hàng loạt mã chứng khoán, ghi log nhất quán (`pipeline_latest.log`) và báo lỗi ra `error_log.csv` để tự động chạy lại.
 
 ---
 
-## Cấu Trúc Package
+## Cấu Trúc Luồng Xử Lý Dữ Liệu
 
 ```
-vnstock_pipeline/
-├── __init__.py
-├── core/                    # Thành phần cốt lõi
-│   ├── fetcher.py          # Lớp thu thập dữ liệu
-│   ├── validator.py        # Lớp xác thực dữ liệu
-│   ├── transformer.py      # Lớp chuyển đổi dữ liệu
-│   ├── exporter.py         # Lớp xuất dữ liệu
-│   ├── scheduler.py        # Bộ điều phối và lập lịch
-│   ├── data_manager.py     # Quản lý bộ nhớ đệm
-│   └── flexible_exporter.py # Tùy chọn xuất linh hoạt
-├── template/                # Các mẫu triển khai cơ sở
-│   └── vnstock.py          # VNFetcher, VNValidator, VNTransformer
-├── tasks/                   # Các tác vụ dựng sẵn
-│   ├── ohlcv.py           # Dữ liệu giá hàng ngày
-│   ├── financial.py        # Báo cáo tài chính
-│   ├── intraday.py        # Dữ liệu trong phiên
-│   └── price_board.py      # Dữ liệu bảng giá trực tuyến
-├── schemas/                 # Định dạng và cấu trúc dữ liệu
-├── stream/                  # Xử lý thời gian thực
-│   ├── client.py           # Kết nối WebSocket
-│   ├── processors.py       # Các bộ xử lý luồng dữ liệu
-│   ├── processors_advanced.py
-│   └── sources/            # Nguồn cấp dữ liệu thời gian thực
-├── utils/                   # Tiện ích bổ trợ
-│   ├── logger.py           # Cấu hình hệ thống ghi nhật ký
-│   ├── env.py              # Quản lý biến môi trường
-│   ├── deduplication.py    # Thuật toán loại bỏ trùng lặp
-│   └── market_hours.py     # Quản lý khung giờ giao dịch
-└── __pycache__/
-```
-
----
-
-## Quy Trình Cơ Bản (Luồng Xử Lý Dữ Liệu)
-
-```
-Dữ liệu thô
+Dữ liệu thô (API/WebSocket)
     │
     ▼
-[Fetcher] ─► Lấy dữ liệu từ API/DB
+[Fetcher] ─► Thu thập dữ liệu (theo nhóm hoặc từng mã)
     │
     ▼
-[Validator] ─► Kiểm tra dữ liệu hợp lệ
+[Validator] ─► Kiểm tra tính toàn vẹn, bắt lỗi cấu trúc, ghi nhận cấu trúc dữ liệu
     │
     ▼
-[Transformer] ─► Chuyển đổi/làm sạch dữ liệu
+[Transformer] ─► Chuyển đổi, làm sạch, chống trùng lặp
     │
     ▼
-[Exporter] ─► Lưu vào CSV/DB/Parquet
+[Exporter] ─► Kết nối tự động với `StorageConfig` -> Ghi ra Parquet/CSV/Excel
     │
     ▼
-Dữ liệu có cấu trúc
+[Storage] ─► Thư mục lưu trữ (~/vnstock_db) & [Metadata Manager] cập nhật Catalog
 ```
 
-**Scheduler** điều phối quá trình trên cho danh sách mã:
-- Xử lý song song nếu mã > 10
-- Tự động thử lại khi có lỗi
-- Ghi nhật ký chi tiết
-- Báo cáo tiến trình
+**Scheduler** điều phối quá trình trên:
+
+- Tự động chia luồng xử lý song song giúp tăng tốc độ thực thi cho nhiệm vụ cập nhật dữ liệu gấp nhiều lần.
+- Tự động nhận diện dữ liệu bị rỗng để bỏ qua, không làm tốn thời gian thử lại.
+- Ghi log (INFO/DEBUG) và xuất `error_log.csv` đối với các mã bị lỗi gián đoạn.
 
 ---
 
-## Các Loại Tác Vụ
+## Kiến Trúc Lưu Trữ Tập Trung
 
-### 1. Dữ Liệu OHLCV
+Hệ thống quản lý thông số thông qua file cấu hình trung tâm tại:
 
-**Mục đích**: Thu thập dữ liệu giá lịch sử cho danh sách mã cổ phiếu.
+- **Mac/Linux:** `~/.vnstock/config/pipeline.toml`
+- **Windows:** `%USERPROFILE%\.vnstock\config\pipeline.toml`
 
-**Lớp chính**:
-- `OHLCVDailyFetcher`: Lấy dữ liệu từ `vnstock_data.explorer.vci.Quote`
-- `OHLCVDailyValidator`: Kiểm tra các cột bắt buộc (time, open, high, low, close, volume)
-- `OHLCVDailyTransformer`: Loại bỏ dữ liệu trùng lặp, chuẩn hóa định dạng thời gian
-- `CSVExport`: Xuất kết quả ra file CSV
+Thay vì truyền `base_path` thủ công vào lớp `Exporter` như các phiên bản cũ, giờ đây mọi Exporter trong thư viện đều đọc tự động cấu hình từ `pipeline.toml`.
 
-**Kết quả**:
-```
-Columns: time, open, high, low, close, volume
-Ví dụ:
-        time   open   high    low  close   volume
-0 2024-11-01  62.42  63.02  62.09  62.09  1732251
-1 2024-11-02  62.09  62.92  61.95  62.42   892151
-```
+### Tính năng cốt lõi:
 
-**Ví dụ**:
-```python
-from vnstock_pipeline.tasks.ohlcv import run_task
+1. **Format linh hoạt**: Mặc định lưu `parquet` để tối ưu dung lượng, nhưng có thể thiết lập `format_overrides` để xuất Báo cáo tài chính ra `excel` hoặc dữ liệu sổ lệnh, thống kê ra `csv` tiện sử dụng.
+2. **Cấu Trúc Linh Hoạt (Flat vs Nested Layout)**: Hệ thống cung cấp hai chế độ tổ chức thư mục linh hoạt để phù hợp với từng Use Case:
 
-tickers = ['VCB', 'ACB', 'HPG']
-run_task(tickers, start="2024-01-01", end="2024-12-02", interval="1D")
-# Kết quả: ./data/ohlcv/VCB.csv, ./data/ohlcv/ACB.csv, ...
-```
+   **Chế độ Flat (Mặc định)**: Dành cho người dùng cá nhân, lược bỏ các cấp thư mục thừa để truy xuất file dễ nhất.
+   ```text
+   ├── stock_db/
+   │   ├── ohlcv/                          # Dữ liệu nến ngày
+   │   │   ├── ACB.parquet
+   │   ├── trades/                         # Dữ liệu khớp lệnh (Tick)
+   │   │   ├── ACB.parquet
+   │   ├── session_stats/                  # Thống kê giao dịch
+   │   │   ├── foreign_flow/
+   │   │   │   └── ACB.parquet
+   │   ├── financial/                      # Dữ liệu BCTC
+   │   │   ├── ACB_balance_sheet.parquet
+   │   ├── news/                           # Dữ liệu tin tức
+   │   │   ├── cafef.parquet
+   │   ├── events/                         # Dữ liệu sự kiện
+   │   │   ├── calendar_events.parquet
+   │   ├── reference/                      # Dữ liệu cấu trúc/Tham chiếu
+   │   │   ├── list/                       
+   │   │   │   └── equity_by_exchange.parquet
+   │   │   ├── company/                    
+   │   │   │   ├── info/
+   │   │   │   │   └── ACB.parquet
+   ```
 
-### 2. Báo Cáo Tài Chính
+   **Chế độ Nested**: Lý tưởng cho Enterprise Data Lake, tổ chức chặt chẽ theo lớp metadata (`[Base]/[Layer]/[Domain]/[Category]/[Interval]/[Instrument]/[Date]`). Tích hợp sẵn **Smart Defaults** để tối ưu cấu trúc (vd: `session_stats` tự bỏ cấp interval, `trades` ép kiểu `tick`).
+   ```text
+   ├── stock_db/
+   │   ├── processed/                      # DataLayer
+   │   │   ├── market/                     # DataDomain
+   │   │   │   ├── ohlcv/                  # Category
+   │   │   │   │   ├── 1D/                 # Interval: Khung thời gian (Ngày)
+   │   │   │   │   │   ├── equity/         # Instrument: Loại tài sản
+   │   │   │   │   │   │   └── ACB.parquet
+   │   │   │   ├── session_stats/          # Category (Bỏ qua Interval vì mặc định là EOD)
+   │   │   │   │   ├── foreign_flow/
+   │   │   │   │   │   ├── equity/
+   │   │   │   │   │   │   └── ACB.parquet
+   │   │   │   ├── trades/                 # Category
+   │   │   │   │   ├── tick/               # Interval: Dữ liệu Tick
+   │   │   │   │   │   ├── equity/
+   │   │   │   │   │   │   ├── 2026-06-20/ # Date: Phân mảnh theo ngày (Partitioning)
+   │   │   │   │   │   │   │   └── ACB.parquet
+   │   │   ├── fundamental/                # DataDomain
+   │   │   │   ├── balance_sheet/          
+   │   │   │   │   ├── 1Y/                 # Interval: Khung năm
+   │   │   │   │   │   ├── equity/         
+   │   │   │   │   │   │   └── ACB.parquet
+   ```
 
-**Mục đích**: Thu thập các nhóm báo cáo tài chính cốt lõi.
-
-**Loại báo cáo**:
-- `balance_sheet`: Bảng cân đối kế toán (94 cột)
-- `income_statement_year`: Kết quả kinh doanh năm (28 cột)
-- `income_statement_quarter`: Kết quả kinh doanh quý (28 cột)
-- `cash_flow`: Lưu chuyển tiền tệ (56 cột)
-- `ratio`: Tỷ số tài chính (58 cột)
-
-**Kết quả**: Lưu riêng các báo cáo
-```
-./data/financial/VCB_balance_sheet.csv
-./data/financial/VCB_income_statement_year.csv
-./data/financial/VCB_cash_flow.csv
-...
-```
-
-**Ví dụ**:
-```python
-from vnstock_pipeline.tasks.financial import run_financial_task
-
-tickers = ['VCB', 'ACB']
-run_financial_task(
-    tickers,
-    balance_sheet_period="year",
-    income_statement_year_period="year",
-    lang="vi",
-    dropna=True
-)
-```
-
-### 3. Dữ Liệu Khớp Lệnh
-
-**Mục đích**: Lấy dữ liệu giao dịch trong phiên (1 phút, 5 phút, 15 phút, 1 giờ)
-
-**Kết quả**: Tương tự OHLCV nhưng với khung thời gian nhỏ hơn
-
-### 4. Dữ Liệu Bảng Giá
-
-**Mục đích**: Lấy thông tin giá khớp lệnh và sổ lệnh trực tiếp.
-
-**Chế độ**:
-- `eod`: Lấy dữ liệu tổng hợp một lần vào cuối ngày giao dịch.
-- `live`: Cập nhật liên tục theo thời gian thực trong phiên giao dịch.
-
-**Ví dụ**:
-```python
-from vnstock_pipeline.tasks.price_board import run_price_board
-
-tickers = ['VCB', 'ACB', 'HPG']
-run_price_board(tickers, interval=60, mode="eod")  # Cập nhật mỗi 60 giây
-```
+3. **Metadata Catalog**: Khi dữ liệu được tải xong, `MetadataManager` âm thầm cập nhật thông tin độ lớn, độ dải ngày vào `_metadata/catalog/`.
 
 ---
 
-## Cách Sử Dụng Chi Tiết
+## Các Loại Tác Vụ Dựng Sẵn
 
-### Cấp độ 1: Sử Dụng Tác Vụ Dựng Sẵn (Đơn Giản)
+Hệ thống cung cấp sẵn các mẫu pipeline đáp ứng đầy đủ nhu cầu của một Data Warehouse chứng khoán:
 
-```python
-from vnstock_pipeline.tasks.ohlcv import run_task
+### 1. Dữ Liệu Tham Chiếu
 
-# Lấy dữ liệu giá cho 3 mã
-tickers = ['VCB', 'ACB', 'HPG']
-run_task(
-    tickers,
-    start="2024-01-01",
-    end="2024-12-02",
-    interval="1D"
-)
-# Kết quả: ./data/ohlcv/VCB.csv, etc.
-```
+Truy xuất toàn bộ danh mục tài sản thị trường (Cổ phiếu, Chỉ số, Phái sinh).
 
-**Ưu điểm**:
-- ✅ Nhanh chóng, không yêu cầu cấu hình phức tạp.
-- ✅ Toàn bộ quy trình xử lý được tự động hóa.
+- **Kết quả**: `reference/equity_by_exchange.parquet`
 
-**Nhược điểm**:
-- ❌ Cấu hình tĩnh, khó can thiệp vào từng bước xử lý riêng lẻ.
+### 2. Dữ Liệu OHLCV cho phân tích kỹ thuật
 
-### Cấp độ 2: Tùy Biến Với Bộ Lập Lịch Scheduler (Trung Bình)
+Dữ liệu giá lịch sử kết thúc phiên. Có cơ chế Append/Merge và kiểm duyệt (High > Low).
 
-```python
-from vnstock_pipeline.core.scheduler import Scheduler
-from vnstock_pipeline.tasks.ohlcv import OHLCVDailyFetcher, OHLCVDailyValidator, OHLCVDailyTransformer
-from vnstock_pipeline.core.exporter import CSVExport
+- **Kết quả**: `ohlcv/{ticker}.parquet`
 
-tickers = ['VCB', 'ACB', 'HPG']
+### 3. Báo Cáo Tài Chính
 
-# Khởi tạo các thành phần
-fetcher = OHLCVDailyFetcher()
-validator = OHLCVDailyValidator()
-transformer = OHLCVDailyTransformer()
-exporter = CSVExport(base_path="./my_data/ohlcv")
+5 bảng (Cân đối kế toán, KQKD, Lưu chuyển tiền tệ, Tỷ số).
 
-# Tạo khung điều phối
-scheduler = Scheduler(
-    fetcher,
-    validator,
-    transformer,
-    exporter,
-    retry_attempts=3,
-    backoff_factor=2.0,
-    max_workers=3,           # (v2.1.5) Số luồng xử lý song song
-    request_delay=0.5,       # (v2.1.5) Độ trễ giữa các yêu cầu (giây)
-    rate_limit_wait=35.0     # (v2.1.5) Thời gian chờ khi gặp giới hạn tốc độ (giây)
-)
+- **Kết quả**: Xuất chung 5 bảng vào `financial/{ticker}.xlsx` (nếu dùng excel) hoặc chia ra nhiều file `.csv`. Hỗ trợ Smart Append dữ liệu quý mới.
 
-# Khởi chạy
-scheduler.run(
-    tickers,
-    fetcher_kwargs={"start": "2024-01-01", "end": "2024-12-02"}
-)
+### 4. Dữ Liệu Khớp Lệnh & Bảng Giá
 
-# Hoặc ghi đè cấu hình tại thời điểm chạy
-scheduler.run(
-    tickers,
-    fetcher_kwargs={"start": "2024-01-01", "end": "2024-12-02"},
-    max_workers=5,           # Ghi đè cấu hình scheduler
-    request_delay=0.3,
-    rate_limit_wait=40.0
-)
-```
+- **Intraday**: Lấy dữ liệu tick. Hỗ trợ Validator phát hiện mất sóng (gap), độ trễ.
+- **Price Board**: Cập nhật giá liên tục.
 
-**Ưu điểm**:
-- ✅ Kiểm soát chi tiết từng thành phần.
-- ✅ Cấu hình tham số linh hoạt.
+### 5. Thống Kê Giao Dịch & Giao Dịch Tổ Chức
 
-**Nhược điểm**:
-- ❌ Cấu trúc mã phức tạp hơn.
+Lịch sử mua/bán khối ngoại, tự doanh, thoả thuận.
 
-### Cấp độ 3: Tạo Tác Vụ Tùy Chỉnh (Nâng Cao)
+- **Kết quả**: `trading_stats/foreign_flow/{ticker}.parquet`
 
-```python
-from vnstock_pipeline.template.vnstock import VNFetcher, VNValidator, VNTransformer
-from vnstock_pipeline.core.scheduler import Scheduler
-from vnstock_pipeline.core.exporter import Exporter
-import pandas as pd
+### 6. Tin Tức & Sự Kiện
 
-# 1. Fetcher tùy chỉnh
-class MyCustomFetcher(VNFetcher):
-    def _vn_call(self, ticker: str, **kwargs) -> pd.DataFrame:
-        # Lấy dữ liệu từ API/DB riêng
-        from vnstock_data import Quote
-        quote = Quote(source="vci", symbol=ticker)
-        df = quote.history(start="2024-01-01", end="2024-12-02", interval="1D")
-        # Thêm cột tùy chỉnh
-        df['source'] = 'custom'
-        return df
-
-# 2. Validator tùy chỉnh
-class MyCustomValidator(VNValidator):
-    required_columns = ["time", "close", "source"]
-
-    def validate(self, data: pd.DataFrame) -> bool:
-        if not super().validate(data):
-            return False
-        # Thêm logic kiểm tra tùy chỉnh
-        if (data['close'] < 0).any():
-            return False
-        return True
-
-# 3. Transformer tùy chỉnh
-class MyCustomTransformer(VNTransformer):
-    def transform(self, data: pd.DataFrame) -> pd.DataFrame:
-        df = super().transform(data)
-        # Thêm cột tính toán
-        df['change_pct'] = df['close'].pct_change() * 100
-        return df
-
-# 4. Exporter tùy chỉnh
-class MyCustomExporter(Exporter):
-    def export(self, data, ticker: str, **kwargs):
-        # Lưu vào DB hoặc webhook
-        print(f"Đang xuất {ticker} với {len(data)} dòng")
-        data.to_csv(f"./data/{ticker}.csv", index=False)
-
-# 5. Chạy
-tickers = ['VCB', 'ACB']
-scheduler = Scheduler(
-    MyCustomFetcher(),
-    MyCustomValidator(),
-    MyCustomTransformer(),
-    MyCustomExporter()
-)
-scheduler.run(tickers)
-```
+- **News**: Lấy tin từ nhiều nguồn, hợp nhất, xoá trùng lặp, dùng buffer tạm thời (`.tmp`) trước khi đổ vào Parquet.
+- **Events**: Lịch trả cổ tức, ĐHĐCĐ. Lưu thành dạng Flat file phân mảnh theo năm (VD: `events/dividend_2024.parquet`).
 
 ---
 
-## Khung Điều Phối (Scheduler)
+## Bảo Vệ Cấu Trúc
 
-### Tính Năng Chính
+Hệ thống tự động phát hiện và bảo vệ Database khỏi các lỗi thay đổi cấu trúc dữ liệu âm thầm (Schema Drift):
 
-```python
-scheduler = Scheduler(
-    fetcher,
-    validator,
-    transformer,
-    exporter,
-    retry_attempts=3,        # Thử lại 3 lần nếu gặp lỗi
-    backoff_factor=2.0       # Chờ theo cấp số nhân (2s, 4s, 8s) giữa các lần thử
-)
-```
-
-### Chế Độ Xử Lý
-
-- **Nếu ≤ 10 mã**: Tự động xử lý tuần tự.
-- **Nếu > 10 mã**: Tự động chia luồng xử lý song song và hiển thị thanh tiến trình.
-
-### Báo Cáo & Ghi Nhật Ký
-
-```
-Đang xử lý 100 mã...
-[████████████████████] 100/100 [00:45<00:00, 2.22 mã/s]
-
-=== Báo Cáo ===
-Tổng số mã: 100
-Thành công: 98
-Thất bại: 2
-Thời gian: 45.2 giây
-Tốc độ: 2.22 mã/giây
-
-Lỗi được lưu tại: ./data/errors.csv
-```
+- **Schema Registry**: Tự động ghi nhận `Baseline Schema` cho từng `category` ở lần tải thành công đầu tiên, lưu tại `_metadata/schemas/`.
+- **Schema Guard**: Trái tim so sánh cấu trúc mới và cũ.
+  - Phân loại `Safe`: Dữ liệu khớp 100% -> Chấp nhận ghi.
+  - Phân loại `Warning` (Additive): Dữ liệu có thêm cột mới -> Vẫn ghi bình thường, chỉ log cảnh báo.
+  - Phân loại `Breaking`: Dữ liệu thiếu cột gốc, hoặc sai kiểu (dtype) -> Từ chối ghi đè, đẩy vào vùng cách ly.
+- **Quarantine Manager**: Dữ liệu lỗi bị giam lỏng tại `[base_path]/.tmp/.quarantine/` kèm theo file `.diff.json` giải thích nguyên nhân. Các file này sẽ tự động dọn dẹp sau 14 ngày.
+- **Validators Logic**: Chạy Non-blocking. Ví dụ `OHLCVValidator` chặn lưu giá trần thấp hơn giá sàn; `IntradayValidator` bắt lỗi mất dữ liệu giữa phiên. Rổ VN30 sẽ được giám sát khắt khe hơn.
 
 ---
 
-## Ví Dụ Hoàn Chỉnh
+## Cấu Trúc Enum Và Hằng Số (`storage_enums.py`)
 
-### Ví Dụ 1: Lấy OHLCV cho VN30
-
-```python
-from vnstock_pipeline.tasks.ohlcv import run_task
-from vnstock import Vnstock
-
-# Lấy danh sách VN30
-stock = Vnstock().stock(symbol="VCB", source="VCI")
-vn30 = stock.listing.symbols_by_group("VN30").tolist()
-
-print(f"Đang lấy dữ liệu cho {len(vn30)} cổ phiếu VN30...")
-
-# Chạy tác vụ
-run_task(
-    vn30,
-    start="2023-01-01",
-    end="2024-12-02",
-    interval="1D"
-)
-
-print(f"✅ Hoàn thành! Kiểm tra tại ./data/ohlcv/")
-```
-
-### Ví Dụ 2: Lấy Báo Cáo Tài Chính
-
-```python
-from vnstock_pipeline.tasks.financial import run_financial_task
-from vnstock import Vnstock
-
-# Lấy VN100
-stock = Vnstock().stock(symbol="VCB", source="VCI")
-vn100 = stock.listing.symbols_by_group("VN100").tolist()
-
-# Lấy dữ liệu tài chính
-run_financial_task(
-    vn100,
-    balance_sheet_period="year",
-    income_statement_year_period="year",
-    income_statement_quarter_period="quarter",
-    cash_flow_period="year",
-    ratio_period="year",
-    lang="vi",
-    dropna=True
-)
-
-print(f"✅ Hoàn thành! Kiểm tra tại ./data/financial/")
-```
-
-### Ví Dụ 3: Pipeline Tùy Chỉnh (OHLCV + Xử Lý Tùy Chỉnh)
-
-```python
-from vnstock_pipeline.core.scheduler import Scheduler
-from vnstock_pipeline.tasks.ohlcv import OHLCVDailyFetcher, OHLCVDailyValidator, OHLCVDailyTransformer
-from vnstock_pipeline.core.exporter import Exporter
-import pandas as pd
-import os
-
-# Transformer tùy chỉnh: Thêm moving average
-class EnrichedTransformer(OHLCVDailyTransformer):
-    def transform(self, data: pd.DataFrame) -> pd.DataFrame:
-        df = super().transform(data)
-        # Thêm SMA20, SMA50
-        df['sma20'] = df['close'].rolling(20).mean()
-        df['sma50'] = df['close'].rolling(50).mean()
-        return df
-
-# Exporter tùy chỉnh: Lưu CSV + Parquet
-class DualExporter(Exporter):
-    def __init__(self, base_path: str):
-        self.base_path = base_path
-        os.makedirs(base_path, exist_ok=True)
-        os.makedirs(f"{base_path}/parquet", exist_ok=True)
-
-    def export(self, data, ticker: str, **kwargs):
-        # CSV
-        csv_path = os.path.join(self.base_path, f"{ticker}.csv")
-        data.to_csv(csv_path, index=False)
-
-        # Parquet
-        parquet_path = os.path.join(self.base_path, "parquet", f"{ticker}.parquet")
-        data.to_parquet(parquet_path, index=False)
-
-        print(f"✅ {ticker}: Đã lưu vào CSV và Parquet")
-
-    def preview(self, ticker: str, n: int = 5, **kwargs):
-        csv_path = os.path.join(self.base_path, f"{ticker}.csv")
-        if os.path.exists(csv_path):
-            return pd.read_csv(csv_path).head(n)
-        return None
-
-# Chạy
-tickers = ['VCB', 'ACB', 'HPG']
-scheduler = Scheduler(
-    OHLCVDailyFetcher(),
-    OHLCVDailyValidator(),
-    EnrichedTransformer(),
-    DualExporter("./enriched_data")
-)
-
-scheduler.run(
-    tickers,
-    fetcher_kwargs={
-        "start": "2024-01-01",
-        "end": "2024-12-02"
-    }
-)
-```
+Bộ framework chuẩn hoá toàn bộ các định nghĩa danh pháp để tránh sai sót:
+- `DataLayer`: `raw`, `processed`, `insights`.
+- `DataDomain`: `market`, `fundamental`, `reference`, `alternative`, v.v.
+- `InstrumentType`: `equity`, `index`, `derivatives`, `etf`, `warrant`, `bond`, `fund`, `crypto`, `forex`, `commodity`.
+- `StorageFormat`: `parquet`, `csv`.
+- `LayoutMode`: `flat`, `nested`.
 
 ---
 
-## Dữ Liệu Thời Gian Thực (Streaming)
+## Cách Bắt Đầu?
 
-### Cấu Trúc và Bộ Xử Lý Dữ liệu Streaming qua WebSocket
+Hệ thống đã thiết kế để bạn bắt đầu cực kỳ nhanh chóng. Bạn có thể:
 
-```python
-import asyncio
-from vnstock_pipeline.stream import WSSClient
-from vnstock_pipeline.stream.processors import CSVProcessor, ConsoleProcessor
-
-async def main():
-    # Bật tính năng Session Manager (quản lý nghỉ trưa tự động)
-    client = WSSClient(enable_session_manager=True, market="HOSE")
-
-    # Đăng ký mã cổ phiếu / phái sinh (Tự resolve mã nội bộ KRX)
-    client.subscribe_symbols(['VCB', 'ACB', 'VN30F1M'])
-
-    # Thêm bộ xử lý để hiển thị và lưu trữ dữ liệu thời gian thực
-    client.add_processor(ConsoleProcessor())
-    client.add_processor(CSVProcessor("data/realtime_{event_type}.csv", naming="standard"))
-
-    # Kết nối (Tự động chạy ngầm keep-alive Engine.IO)
-    await client.connect()
-
-# Chạy (Cần quản lý Event Loop bằng asyncio.Event để chặn kết thúc sớm trong thực tế)
-# asyncio.run(main())
-```
-
-> [!TIP]
-> **Tải Bộ Code Mẫu**
-> Để xem thêm các minh họa nâng cao về streaming (như kết hợp Redis Pub/Sub, Discord Signal Bot cảnh báo RSI/MACD, hay ghi DB song song bằng DuckDB), người dùng thuộc gói tài trợ **Golden** hoặc **Diamond**, vui lòng đăng nhập và tải gói thư mục ZIP độc quyền tại [trang Quản lý tài khoản Vnstocks](https://vnstocks.com/account?section=packages&tab=exclusive-files).
-
----
-
-## Lưu Ý Quan Trọng
-
-### 1. Index vs Regular Columns
-
-Một số exporter yêu cầu index:
-```python
-# ❌ Sai: Index là range
-df.to_csv("data.csv")  # DataFrame với RangeIndex
-
-# ✅ Đúng: Không có index
-df.to_csv("data.csv", index=False)
-```
-
-### 2. Xử Lý DateTime
-
-```python
-# ❌ Sai: Chuỗi ngày
-df['time'] = "2024-01-01"
-
-# ✅ Đúng: pd.Timestamp hoặc datetime
-df['time'] = pd.to_datetime("2024-01-01")
-```
-
-### 3. Xử Lý Lỗi
-
-```python
-# ❌ Sai: Bỏ qua lỗi im lặng
-try:
-    data = fetch_data()
-except:
-    pass
-
-# ✅ Đúng: Ghi nhật ký và thử lại
-try:
-    data = fetch_data()
-except Exception as e:
-    logger.error(f"Lấy dữ liệu thất bại: {e}")
-    # Logic thử lại
-```
-
----
-
-## Tối Ưu Hóa Hiệu Suất
-
-### 1. Xử Lý Song Song
-
-```python
-# Tự động: nếu > 10 mã
-scheduler.run(100_tickers)  # Tự động song song
-
-# Thủ công: Điều chỉnh số worker
-scheduler.max_workers = 20
-```
-
-### 2. Bộ Nhớ Đệm
-
-```python
-from vnstock_pipeline.core.data_manager import DataManager
-
-manager = DataManager(cache_dir="./cache")
-data = manager.get_or_fetch(ticker, fetch_func)
-```
-
-### 3. Xử Lý Theo Lô
-
-```python
-# Lấy dữ liệu theo lô 50 mã
-tickers = ['VCB', 'ACB', ...] * 50
-
-scheduler.run(tickers[0:50])
-scheduler.run(tickers[50:100])
-scheduler.run(tickers[100:150])
-```
-
----
-
-## Khắc Phục Sự Cố
-
-### Lỗi: Yêu cầu định dạng DatetimeIndex
-
-```python
-# ❌ Sai
-df.index
-
-# ✅ Đúng
-df = df.set_index('time')
-df.index = pd.to_datetime(df.index)
-```
-
-### Lỗi: "Missing required columns"
-
-```python
-# Kiểm tra các cột bắt buộc
-print(df.columns)
-
-# Thêm nếu thiếu
-if 'volume' not in df.columns:
-    df['volume'] = 0
-```
-
-### Lỗi: "Connection refused"
-
-```python
-# Kiểm tra kết nối internet
-# Kiểm tra API endpoint có khả dụng không
-# Thử lại nếu tạm thời
-```
-
----
-
-## Tài Liệu Tham Khảo
-
-- **Vnstock**: https://vnstocks.com/
-- **Pandas**: https://pandas.pydata.org/
-- **Async**: https://docs.python.org/3/library/asyncio.html
+1. Đọc tiếp [Cách Sử Dụng Tasks và Builders](02-tasks-and-builders.md) để biết cách chạy Pipeline.
+2. Hoặc đọc ngay [Vận Hành bằng CLI & Các Use Case Thực Tế](05-cli-and-use-cases.md) để thử nghiệm tải dữ liệu không cần viết code!

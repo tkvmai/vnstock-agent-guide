@@ -1,6 +1,6 @@
 # WebSocket Streaming Data — Standard Schema Reference
 
-> Tài liệu chi tiết cấu trúc dữ liệu streaming từ WebSocket feed theo **tiêu chuẩn mới (FIX/Bloomberg-aligned)**.
+> Tài liệu chi tiết cấu trúc dữ liệu streaming từ WebSocket feed được **thiết kế lấy cảm hứng từ chuẩn quốc tế (FIX/Bloomberg)**.
 > Tiêu chuẩn này được thiết kế để tương thích hoàn toàn với lớp UI `vnstock_data` .
 
 ---
@@ -16,7 +16,7 @@ Tiêu chuẩn mới áp dụng các nguyên tắc đặt tên (naming convention
 5. **Suffix `_value`** cho giá trị: `total_value`, `net_value`.
 6. **Prefix `foreign_`** cho dữ liệu giao dịch nước ngoài (trước đây dùng `fBVol`, `fSVal`...).
 7. **Thay `timestamp` bằng `time`** (nhất quán với lớp UI `vnstock_data`).
-8. **Thay `ticker` bằng `symbol`** trong streaming (nhất quán chuẩn FIX).
+8. **Thay `ticker` bằng `symbol`** trong streaming (phù hợp với thông lệ của chuẩn FIX).
 9. **Sổ lệnh (Board)** tự động nhận diện bên mua/bán (side) và map ra `bid_price_N` / `ask_price_N`.
 10. **Lược bỏ các trường thừa (metadata)**: `event_type`, `change_flag`, `low_flag`.
 
