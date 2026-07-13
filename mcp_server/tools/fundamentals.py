@@ -112,6 +112,120 @@ def get_income_statement(symbol: str, period: str = "year", n_periods: int = 4) 
         return handle_vnstock_error(e, "get_income_statement", symbol)
 
 
+def get_cash_flow(symbol: str, period: str = "year", n_periods: int = 4) -> str:
+    """
+    Get cash flow statement: operating, investing, and financing activities.
+
+    Args:
+        symbol: Stock ticker (e.g. 'TCB')
+        period: 'year' or 'quarter'
+        n_periods: Number of periods to show (default 4)
+    """
+    symbol = symbol.upper().strip()
+    n_periods = max(1, min(n_periods, 12))
+    if period not in ("year", "quarter"):
+        return "[Invalid period. Use 'year' or 'quarter']"
+    try:
+        try:
+            from vnstock_data import Fundamental
+            df = Fundamental().equity(symbol).cash_flow(period=period)
+        except ImportError:
+            from vnstock import Finance
+            df = Finance(symbol=symbol, source="kbs").cash_flow(period=period)
+
+        if df is None or df.empty:
+            return f"No cash flow data found for {symbol}."
+
+        import pandas as pd
+        if "item" in df.columns or "ticker" in df.columns:
+            label_cols = [c for c in df.columns if df[c].dtype == object or c in ("item", "item_id", "ticker")]
+            value_cols = [c for c in df.columns if c not in label_cols]
+            value_cols = value_cols[-n_periods:] if len(value_cols) > n_periods else value_cols
+            df = df[label_cols + value_cols]
+
+        return (
+            f"## Cash Flow Statement: {symbol} ({period}, last {n_periods} periods)\n\n"
+            + to_claude_text(df, mode="table", max_rows=40)
+        )
+    except Exception as e:
+        return handle_vnstock_error(e, "get_cash_flow", symbol)
+
+
+def get_shareholders(symbol: str) -> str:
+    """
+    Get list of major shareholders with ownership percentage.
+
+    Args:
+        symbol: Stock ticker (e.g. 'TCB')
+    """
+    symbol = symbol.upper().strip()
+    try:
+        try:
+            from vnstock_data import Company
+            df = Company(symbol=symbol, source="VCI").shareholders()
+        except ImportError:
+            from vnstock import Company
+            df = Company(symbol=symbol, source="vci").shareholders()
+
+        if df is None or df.empty:
+            return f"No shareholder data found for {symbol}."
+
+        return f"## Major Shareholders: {symbol}\n\n" + to_claude_text(df, mode="table", max_rows=30)
+    except Exception as e:
+        return handle_vnstock_error(e, "get_shareholders", symbol)
+
+
+def get_company_officers(symbol: str, filter_by: str = "working") -> str:
+    """
+    Get list of board of directors and senior management.
+
+    Args:
+        symbol: Stock ticker (e.g. 'TCB')
+        filter_by: 'working' (current), 'resigned', or 'all'
+    """
+    symbol = symbol.upper().strip()
+    if filter_by not in ("working", "resigned", "all"):
+        return "[Invalid filter_by. Use 'working', 'resigned', or 'all']"
+    try:
+        try:
+            from vnstock_data import Company
+            df = Company(symbol=symbol, source="VCI").officers(filter_by=filter_by)
+        except ImportError:
+            from vnstock import Company
+            df = Company(symbol=symbol, source="vci").officers()
+
+        if df is None or df.empty:
+            return f"No officer data found for {symbol}."
+
+        return f"## Officers ({filter_by}): {symbol}\n\n" + to_claude_text(df, mode="table", max_rows=30)
+    except Exception as e:
+        return handle_vnstock_error(e, "get_company_officers", symbol)
+
+
+def get_company_events(symbol: str) -> str:
+    """
+    Get corporate events: dividends, rights issues, shareholder meetings.
+
+    Args:
+        symbol: Stock ticker (e.g. 'TCB')
+    """
+    symbol = symbol.upper().strip()
+    try:
+        try:
+            from vnstock_data import Company
+            df = Company(symbol=symbol, source="VCI").events()
+        except ImportError:
+            from vnstock import Company
+            df = Company(symbol=symbol, source="vci").events()
+
+        if df is None or df.empty:
+            return f"No event data found for {symbol}."
+
+        return f"## Corporate Events: {symbol}\n\n" + to_claude_text(df, mode="table", max_rows=30)
+    except Exception as e:
+        return handle_vnstock_error(e, "get_company_events", symbol)
+
+
 def get_balance_sheet(symbol: str, period: str = "year", n_periods: int = 4) -> str:
     """
     Get balance sheet: total assets, liabilities, equity, and key sub-items.

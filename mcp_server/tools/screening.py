@@ -82,6 +82,20 @@ def get_money_flow(flow_type: str = "foreign") -> str:
         if df is None or df.empty:
             return f"No money flow data for type='{flow_type}'."
 
+        # f.active() has a bug: missing 'symbol' column. All three DataFrames
+        # share the same 658 rows in the same order, so borrow symbols from foreign().
+        if flow_type == "active" and "symbol" not in df.columns:
+            try:
+                df_ref = f.foreign()
+                if df_ref is not None and "symbol" in df_ref.columns and len(df_ref) == len(df):
+                    df.insert(0, "symbol", df_ref["symbol"].values)
+            except Exception:
+                pass  # fallback: display without symbol column
+
+        # Sort by value_1d descending so top movers appear first (not last-30 alphabetically)
+        if "value_1d" in df.columns:
+            df = df.sort_values("value_1d", ascending=False)
+
         label = {
             "foreign": "Dòng Tiền Khối Ngoại (Foreign Flow)",
             "active": "Dòng Tiền Chủ Động (Active Buy/Sell Flow)",

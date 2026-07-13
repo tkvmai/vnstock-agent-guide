@@ -25,8 +25,8 @@ def df_to_markdown(df: pd.DataFrame, max_rows: int = 30) -> str:
         return "(No data)"
     total = len(df)
     if total > max_rows:
-        df = df.tail(max_rows).copy()
-        note = f"[Showing last {max_rows} of {total} rows]\n\n"
+        df = df.head(max_rows).copy()
+        note = f"[Showing top {max_rows} of {total} rows]\n\n"
     else:
         note = ""
     try:

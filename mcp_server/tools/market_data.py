@@ -77,6 +77,98 @@ def get_intraday(symbol: str, limit: int = 100) -> str:
         return handle_vnstock_error(e, "get_intraday", symbol)
 
 
+def get_price_board(symbols: list) -> str:
+    """
+    Get real-time price board snapshot for multiple stock symbols at once.
+    Returns bid/ask, match price, ceiling/floor, foreign buy/sell volume.
+
+    Args:
+        symbols: List of stock tickers (e.g. ['TCB', 'VCB', 'HPG'])
+    """
+    if not symbols:
+        return "[symbols list cannot be empty]"
+    symbols = [s.upper().strip() for s in symbols[:20]]  # cap at 20
+    try:
+        try:
+            from vnstock_data import Trading
+            df = Trading(symbol=symbols[0], source="KBS").price_board(symbols_list=symbols)
+        except ImportError:
+            from vnstock import Trading
+            df = Trading(symbol=symbols[0], source="kbs").price_board(symbols_list=symbols)
+
+        if df is None or df.empty:
+            return f"No price board data for {symbols}."
+
+        return (
+            f"## Price Board: {', '.join(symbols)}\n\n"
+            + to_claude_text(df, mode="table", max_rows=25)
+        )
+    except Exception as e:
+        return handle_vnstock_error(e, "get_price_board", str(symbols))
+
+
+def get_foreign_trade(symbol: str, start: str, end: str) -> str:
+    """
+    Get foreign investor buy/sell flow history for a stock.
+    Shows daily foreign buy/sell volume, net value, and remaining room.
+
+    Args:
+        symbol: Stock ticker (e.g. 'TCB')
+        start: Start date YYYY-MM-DD
+        end: End date YYYY-MM-DD
+    """
+    symbol = symbol.upper().strip()
+    for err in [validate_date(start, "start"), validate_date(end, "end")]:
+        if err:
+            return err
+    try:
+        try:
+            from vnstock_data import Trading
+            df = Trading(symbol=symbol, source="VCI").foreign_trade(start=start, end=end)
+        except ImportError:
+            from vnstock import Trading
+            df = Trading(symbol=symbol, source="vci").foreign_trade(start=start, end=end)
+
+        if df is None or df.empty:
+            return f"No foreign trade data for {symbol} between {start} and {end}."
+
+        return (
+            f"## Foreign Trade: {symbol} ({start} → {end})\n\n"
+            + to_claude_text(df, mode="table", max_rows=50)
+        )
+    except Exception as e:
+        return handle_vnstock_error(e, "get_foreign_trade", symbol)
+
+
+def get_insider_deals(symbol: str, limit: int = 20) -> str:
+    """
+    Get insider trading records: buy/sell transactions by directors and major shareholders.
+
+    Args:
+        symbol: Stock ticker (e.g. 'TCB')
+        limit: Number of records to return (default 20)
+    """
+    symbol = symbol.upper().strip()
+    limit = max(1, min(limit, 100))
+    try:
+        try:
+            from vnstock_data import Trading
+            df = Trading(symbol=symbol, source="VCI").insider_deal(limit=limit)
+        except ImportError:
+            from vnstock import Trading
+            df = Trading(symbol=symbol, source="vci").insider_deal(limit=limit)
+
+        if df is None or df.empty:
+            return f"No insider deal records found for {symbol}."
+
+        return (
+            f"## Insider Deals: {symbol} (latest {limit})\n\n"
+            + to_claude_text(df, mode="table", max_rows=limit)
+        )
+    except Exception as e:
+        return handle_vnstock_error(e, "get_insider_deals", symbol)
+
+
 def get_market_overview() -> str:
     """
     Get current snapshot of major Vietnamese market indices:
