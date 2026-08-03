@@ -84,7 +84,7 @@ trước → age 3 (muộn).
 |-----------|-----------|-----------|
 | `BREAKOUT_FRESH` | 🟢 Mua ngay | `breakout_ratio ≥ 1.00` **và** `breakout_age ≤ 1` **và** `breakout_ratio ≤ 1.04` **và có LỰC ĐẨY**: `return_1d > 0` và `closing_strength ≥ 40%` |
 | `BREAKOUT_LATE` | 🟠 Muộn | `breakout_ratio ≥ 1.00` **và** (`breakout_age ≥ 2` **hoặc** `breakout_ratio > 1.04`) |
-| `PRE_BREAKOUT` | 🔵 Sắp breakout | `breakout_ratio < 1.00` **và** `dist_below_pivot ≤ 3%` **và** `dry_up_ratio < 0.9` **và** `narrowing_ratio < 0.9` **và** `ma20 > ma50` **và** `slope_ma20 > 0` **và** `rs_weighted ≥ 0` **và NỀN SẠCH**: không có phiên nào đóng trên pivot trong 3 phiên gần nhất |
+| `PRE_BREAKOUT` | 🔵 Sắp breakout | `breakout_ratio < 1.00` **và** `dist_below_pivot ≤ 3%` **và** `dry_up_ratio < 1.05` **và** `narrowing_ratio < 1.05` *(nới từ 0.9 — backtest 10 năm 15/07: kênh PRE tăng gấp đôi, chất lượng gần nguyên vẹn, PRE là state bền nhất qua cả bear 2022-23)* **và** `ma20 > ma50` **và** `slope_ma20 > 0` **và** `rs_weighted ≥ 0` **và NỀN SẠCH**: không có phiên nào đóng trên pivot trong 3 phiên gần nhất |
 | `NONE` | — | còn lại (kể cả chạm-đỉnh-không-lực-đẩy) → **loại** khỏi bảng khuyến nghị |
 
 > **Thrust gate & nền sạch (bổ sung từ loss-review 09/07/2026** — `analysis/loss_reviews.md`**):**
@@ -225,7 +225,7 @@ BUY      = BUY_raw × overheat_mult × overhead_mult × state_mult
 |---|---|
 | `BREAKOUT_FRESH` | ×1.00 |
 | `PRE_BREAKOUT` | ×0.95 (sớm nhất, R:R tốt nhất — cố ý giữ sát fresh) |
-| `BREAKOUT_LATE` | ×0.60 (bị hạ — không bao giờ là top pick) |
+| `BREAKOUT_LATE` | ×0.85 *(nới từ 0.60 — backtest 10 năm: LATE vượt FRESH ở CẢ train lẫn validation (+1.08% vs +0.35% T+3 trong regime ok) — momentum tiếp diễn hiệu quả ở VN; giữ <1.0 vì MAE sâu nhất và chết nặng nhất khi thị trường quay đầu)* |
 | `NONE` | ×0.00 (loại) |
 
 Nhờ vậy có **một điểm BUY so sánh được** để bảng sắp xếp hợp lý: fresh ≳ pre-breakout > late.
@@ -239,6 +239,22 @@ Nhờ vậy có **một điểm BUY so sánh được** để bảng sắp xếp
 | 65–74 | Khá | Watchlist |
 | 50–64 | Trung bình | Không ưu tiên |
 | < 50 | Yếu | Bỏ qua |
+
+### 2.8 Đèn vàng Sức khỏe thị trường (Phase 2 — 19/07/2026, backtest-passed)
+
+Ngoài regime gate (phanh cuối, phản ứng sau), điểm **Sức khỏe thị trường** (0-100; phiên
+phân phối O'Neil có luật hết hạn rally +5% · breadth %mã>MA20 · canary lứa KN gần nhất ·
+index/MA20) điều tiết TRƯỚC:
+
+| Health | Chế độ | Hành vi |
+|---|---|---|
+| ≥ 55 | ✅ Bình thường | như thiết kế |
+| 40–55 | ⚕️ CHỌN LỌC | chỉ alert/ghi nhận mã BUY ≥ 65 |
+| < 40 | ⛔ TẠM NGỪNG | không khuyến nghị mới |
+
+Bằng chứng (kho backtest 10 năm, objective retT5−0.3·|MAE5|, ngưỡng chọn trên TRAIN):
+TRAIN −0.019→+0.018 · VALIDATION −1.115→−1.009 (cải thiện cùng chiều trên dữ liệu chưa
+từng dùng chọn ngưỡng). Knob: `MH_GATE_*` trong config — tắt được hoàn toàn.
 
 ---
 

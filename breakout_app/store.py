@@ -13,6 +13,7 @@ _state = {
     "regime": "ok",
     "regime_ratio": None,
     "regime_msg": "",
+    "market_health": None,          # observe-only fragility score (engine/market_health)
     "last_scan": None,              # datetime of last completed scan
     "status": "idle",              # idle | scanning | error
     "error": None,

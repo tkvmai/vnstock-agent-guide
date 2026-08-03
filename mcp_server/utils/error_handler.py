@@ -16,16 +16,27 @@ def handle_vnstock_error(e: Exception, tool_name: str, symbol: str = "") -> str:
             f"[Authentication error in {tool_name}{context}. "
             "Check your vnstock license credentials in ~/.vnstock/auth_state.json.]"
         )
-    if "not found" in msg or "invalid symbol" in msg or "no data" in msg:
+    # HTTP status errors are about the ENDPOINT, not the symbol — "404 - Not Found"
+    # used to fall through to the symbol branch and produce a nonsense
+    # "Symbol '' not found" for symbol-less tools like get_macro_indicator.
+    if "404" in msg or "500" in msg or "502" in msg or "503" in msg:
+        return (
+            f"[Upstream data source returned an HTTP error in {tool_name}{context}: "
+            f"{str(e)[:160]}. The endpoint may have moved or been retired — this is "
+            "not a problem with your arguments.]"
+        )
+    if symbol and ("not found" in msg or "invalid symbol" in msg or "no data" in msg):
         return (
             f"[Symbol '{symbol.upper()}' not found or no data available{context}. "
             "Use get_index_members('VN30') to browse valid symbols.]"
         )
     if "timeout" in msg or "timed out" in msg or "connection" in msg:
         return (
-            f"[Network timeout in {tool_name}{context}. "
+            f"[Network error in {tool_name}{context}: {str(e)[:160]} "
             "The data source may be temporarily unavailable. Please retry.]"
         )
+    if "not found" in msg or "no data" in msg:
+        return f"[No data available in {tool_name}: {str(e)[:200]}]"
     if "modulenotfounderror" in type(e).__name__.lower() or "importerror" in type(e).__name__.lower():
         lib = str(e).split("'")[1] if "'" in str(e) else "unknown"
         return (

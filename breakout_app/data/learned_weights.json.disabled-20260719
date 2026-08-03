@@ -1,0 +1,23 @@
+{
+  "W_BUY": {
+    "liquidity": 0.385,
+    "momentum": 0.315,
+    "signal": 0.3
+  },
+  "meta": {
+    "updated": "2026-07-19T15:30:12",
+    "n_samples": 367,
+    "win_rate": 0.2752,
+    "alpha": 0.5,
+    "corr": {
+      "liquidity": 0.019,
+      "momentum": 0.02,
+      "signal": -0.021
+    },
+    "default_W_BUY": {
+      "liquidity": 0.35,
+      "momentum": 0.25,
+      "signal": 0.4
+    }
+  }
+}

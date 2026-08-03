@@ -1,0 +1,534 @@
+{
+ "baseline_train": {
+  "obj": -0.0188,
+  "n": 5033,
+  "ret_t3": 0.545,
+  "ret_t5": 0.742,
+  "ret_t10": 1.213,
+  "win_t3": 49.5,
+  "mae5": 2.536,
+  "picks_per_year": 839.0
+ },
+ "tuned_train": {
+  "obj": 0.1393,
+  "n": 3805,
+  "ret_t3": 0.662,
+  "ret_t5": 0.917,
+  "ret_t10": 1.467,
+  "win_t3": 50.6,
+  "mae5": 2.592,
+  "picks_per_year": 634.0
+ },
+ "baseline_valid": {
+  "obj": -1.1153,
+  "n": 1195,
+  "ret_t3": -0.164,
+  "ret_t5": -0.249,
+  "ret_t10": -0.44,
+  "win_t3": 45.3,
+  "mae5": 2.888,
+  "picks_per_year": 598.0
+ },
+ "tuned_valid": {
+  "obj": -1.727,
+  "n": 385,
+  "ret_t3": -0.401,
+  "ret_t5": -0.714,
+  "ret_t10": -1.306,
+  "win_t3": 43.1,
+  "mae5": 3.375,
+  "picks_per_year": 192.0
+ },
+ "walkforward_fit_2016_18": {
+  "obj": 0.1234,
+  "n": 2056,
+  "ret_t3": 0.712,
+  "ret_t5": 0.877,
+  "ret_t10": 1.255,
+  "win_t3": 50.7,
+  "mae5": 2.512,
+  "picks_per_year": 685.0
+ },
+ "walkforward_test_2019_21": {
+  "obj": 0.158,
+  "n": 1749,
+  "ret_t3": 0.603,
+  "ret_t5": 0.964,
+  "ret_t10": 1.715,
+  "win_t3": 50.4,
+  "mae5": 2.686,
+  "picks_per_year": 583.0
+ },
+ "sigma": 0.10680974752858496,
+ "changed": [
+  [
+   "B_OVERHEAD",
+   0.1581
+  ]
+ ],
+ "params": {
+  "W_BUY": {
+   "liquidity": 0.35,
+   "momentum": 0.25,
+   "signal": 0.4
+  },
+  "STATE_MULT": {
+   "BREAKOUT_FRESH": 1.0,
+   "PRE_BREAKOUT": 0.95,
+   "BREAKOUT_LATE": 0.85,
+   "NONE": 0.0
+  },
+  "W_TRIGGER": {
+   "price": 0.35,
+   "volume": 0.25,
+   "dry_up": 0.2,
+   "base_quality": 0.1,
+   "closing": 0.1
+  },
+  "W_SETUP": {
+   "proximity": 0.3,
+   "base_quality": 0.25,
+   "dry_up": 0.2,
+   "structure": 0.15,
+   "rs": 0.1
+  },
+  "W_SETUP_STRUCTURE": {
+   "alignment": 0.5,
+   "slope": 0.5
+  },
+  "W_LIQUIDITY": {
+   "gtgd20": 0.55,
+   "intraday": 0.3,
+   "cv": 0.15
+  },
+  "W_MOMENTUM": {
+   "composite": 0.3,
+   "ma": 0.2,
+   "rs": 0.2,
+   "flow": 0.2,
+   "technical": 0.1
+  },
+  "W_COMPOSITE": {
+   "r1d": 0.15,
+   "r5d": 0.5,
+   "r20d": 0.35
+  },
+  "W_MA": {
+   "price_vs_ma20": 0.35,
+   "price_vs_ma50": 0.2,
+   "alignment": 0.2,
+   "slope": 0.25
+  },
+  "W_SLOPE": {
+   "ma20": 0.55,
+   "ma50": 0.45
+  },
+  "W_RS": {
+   "rs_3m": 0.35,
+   "rs_1m": 0.65
+  },
+  "W_FLOW": {
+   "ad": 0.4,
+   "smf": 0.6
+  },
+  "W_TECHNICAL": {
+   "rsi": 0.6,
+   "macd": 0.4
+  },
+  "FRESH_MAX_RATIO": 1.04,
+  "FRESH_MAX_AGE": 1,
+  "FRESH_MIN_RETURN_1D": 0.0,
+  "FRESH_MIN_CLOSING": 40.0,
+  "PRE_MAX_DIST": 3.0,
+  "PRE_DRYUP_MAX": 1.05,
+  "PRE_NARROWING_MAX": 1.05,
+  "CONSISTENCY_MULT": {
+   "3": 1.1,
+   "2": 1.0,
+   "1": 0.85,
+   "0": 0.7
+  },
+  "NEUTRAL_FLOW": 40.0,
+  "B_GTGD20": {
+   "uppers": [
+    10,
+    20,
+    50,
+    100,
+    200
+   ],
+   "scores": [
+    0,
+    20,
+    40,
+    60,
+    80
+   ],
+   "default": 100
+  },
+  "B_CV": {
+   "uppers": [
+    30,
+    50,
+    75,
+    100,
+    150
+   ],
+   "scores": [
+    100,
+    80,
+    60,
+    40,
+    20
+   ],
+   "default": 0
+  },
+  "B_R1D": {
+   "uppers": [
+    -1,
+    0,
+    1,
+    3
+   ],
+   "scores": [
+    0,
+    20,
+    50,
+    75
+   ],
+   "default": 90
+  },
+  "B_R5D": {
+   "uppers": [
+    -3,
+    0,
+    2,
+    5,
+    10,
+    15
+   ],
+   "scores": [
+    0,
+    15,
+    40,
+    70,
+    90,
+    100
+   ],
+   "default": 65
+  },
+  "B_R20D": {
+   "uppers": [
+    -5,
+    0,
+    5,
+    15,
+    25
+   ],
+   "scores": [
+    0,
+    20,
+    50,
+    80,
+    100
+   ],
+   "default": 75
+  },
+  "B_PVMA20": {
+   "uppers": [
+    -2,
+    0,
+    1.5,
+    3.5,
+    6,
+    9
+   ],
+   "scores": [
+    0,
+    15,
+    75,
+    90,
+    65,
+    30
+   ],
+   "default": 0
+  },
+  "B_PVMA50": {
+   "uppers": [
+    -2,
+    0,
+    3,
+    8,
+    15
+   ],
+   "scores": [
+    0,
+    15,
+    50,
+    80,
+    100
+   ],
+   "default": 70
+  },
+  "B_ALIGN": {
+   "uppers": [
+    -3,
+    -1,
+    0,
+    1,
+    3
+   ],
+   "scores": [
+    0,
+    20,
+    40,
+    65,
+    85
+   ],
+   "default": 100
+  },
+  "B_SLOPE20": {
+   "uppers": [
+    -0.3,
+    0,
+    0.3,
+    0.6
+   ],
+   "scores": [
+    0,
+    15,
+    40,
+    70
+   ],
+   "default": 100
+  },
+  "B_SLOPE50": {
+   "uppers": [
+    -0.2,
+    0,
+    0.2,
+    0.4
+   ],
+   "scores": [
+    0,
+    20,
+    50,
+    80
+   ],
+   "default": 100
+  },
+  "B_RSW": {
+   "uppers": [
+    -5,
+    0,
+    3,
+    8,
+    15
+   ],
+   "scores": [
+    0,
+    20,
+    45,
+    65,
+    85
+   ],
+   "default": 100
+  },
+  "B_AD": {
+   "uppers": [
+    0.7,
+    1.0,
+    1.5,
+    2.0
+   ],
+   "scores": [
+    20,
+    40,
+    60,
+    80
+   ],
+   "default": 100
+  },
+  "B_RSI": {
+   "uppers": [
+    40,
+    45,
+    50,
+    60,
+    70,
+    80
+   ],
+   "scores": [
+    0,
+    10,
+    35,
+    60,
+    100,
+    60
+   ],
+   "default": 20
+  },
+  "B_MACD": {
+   "uppers": [
+    -0.1,
+    0,
+    0.05,
+    0.2
+   ],
+   "scores": [
+    0,
+    20,
+    50,
+    75
+   ],
+   "default": 100
+  },
+  "B_PRICE_FRESH": {
+   "uppers": [
+    1.02,
+    1.04,
+    1.07
+   ],
+   "scores": [
+    100,
+    80,
+    50
+   ],
+   "default": 20
+  },
+  "B_VOLR": {
+   "uppers": [
+    1.0,
+    1.3,
+    1.8
+   ],
+   "scores": [
+    0,
+    50,
+    80
+   ],
+   "default": 100
+  },
+  "B_DRYUP": {
+   "uppers": [
+    0.5,
+    0.7,
+    0.9,
+    1.1
+   ],
+   "scores": [
+    100,
+    80,
+    60,
+    40
+   ],
+   "default": 20
+  },
+  "B_BASE": {
+   "uppers": [
+    0.5,
+    0.7,
+    0.9,
+    1.1
+   ],
+   "scores": [
+    100,
+    80,
+    60,
+    40
+   ],
+   "default": 20
+  },
+  "B_CLOSING": {
+   "uppers": [
+    20,
+    40,
+    60,
+    80
+   ],
+   "scores": [
+    20,
+    40,
+    60,
+    80
+   ],
+   "default": 100
+  },
+  "B_PROX": {
+   "uppers": [
+    1,
+    2,
+    3
+   ],
+   "scores": [
+    100,
+    80,
+    55
+   ],
+   "default": 0
+  },
+  "B_AGE_FACTOR": {
+   "uppers": [
+    1,
+    2,
+    3
+   ],
+   "scores": [
+    1.0,
+    0.9,
+    0.6
+   ],
+   "default": 0.3
+  },
+  "B_OVERHEAT_RSI": {
+   "uppers": [
+    70,
+    75,
+    80
+   ],
+   "scores": [
+    1.0,
+    0.9,
+    0.75
+   ],
+   "default": 0.55
+  },
+  "B_OVERHEAT_EXT": {
+   "uppers": [
+    6,
+    9,
+    13
+   ],
+   "scores": [
+    1.0,
+    0.85,
+    0.65
+   ],
+   "default": 0.45
+  },
+  "B_OVERHEAD": {
+   "uppers": [
+    -10,
+    -5
+   ],
+   "scores": [
+    0.49,
+    0.4
+   ],
+   "default": 1.0
+  },
+  "B_RS_ACCEL": {
+   "uppers": [
+    -5,
+    0,
+    5
+   ],
+   "scores": [
+    0.8,
+    0.9,
+    1.0
+   ],
+   "default": 1.1
+  }
+ }
+}

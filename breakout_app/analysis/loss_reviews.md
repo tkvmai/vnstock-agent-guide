@@ -120,6 +120,33 @@ Nên để `run.py` chạy qua 15:30 các ngày giao dịch (job sáng 08:00 cũ
 
 ---
 
+## Đợt review 15/07/2026 — lứa 08/07 (16 ca) + 09/07 (9 ca): sự kiện điều chỉnh toàn thị trường
+
+**Chẩn đoán chung (25/25 ca): `thị_trường_đỏ` — một sự kiện vĩ mô duy nhất.** VN-Index rơi
+1853.7 (8/7) → 1783.6 (15/7) = **−3.8% trong 5 phiên** (−0.70, −0.67, −1.52, +0.34, −1.28).
+Cửa sổ T+1..T+3 của cả hai lứa nằm trọn trong chuỗi giảm; **MFE gần như toàn bộ ÂM** — bị
+khóa lỗ từ T+1, đúng kịch bản rủi ro T+2.5 ở quy mô lớn nhất từ khi chạy app.
+
+- **Không phải lỗi tín hiệu:** setup 8/7 giống hệt dạng đã thắng trong uptrend tháng 6;
+  regime lúc KN 8/7 = "ok" (index 1853, sát đỉnh, phiên +0.29%) — không quy tắc per-stock nào
+  thấy trước cú trượt 5 phiên sau đó. Gate regime phản ứng có trễ theo thiết kế (chuyển
+  caution 9/7, blocked ~13/7 khi ratio < 0.97; hiện 0.9664 — app đang đúng đắn im lặng).
+- **Cụm ngành CK lặp lần 2 (P7):** 11/25 ca là công ty chứng khoán (BSI −9.9, SHS −9.8/−7.9,
+  FTS −7.2, VCI −6.7/−6.8, VND −6.4, TCX −5.8, ORS −5.6, MBS −5.5/−4.1) — beta cao khuếch đại
+  gấp ~2 lần mức giảm index. Alert 8/7 chứa 4/8 mã CK. Ước lượng nếu áp trần 2 mã CK/danh sách
+  alert: các slot CK dôi ra thay bằng ngân hàng/khác (lỗ TB ~−3% thay vì ~−7%) → giảm ~nửa
+  thiệt hại phần vượt trội, nhưng KHÔNG tránh được lỗ (sự kiện toàn thị trường).
+- **Lọc index-đỏ-intraday: bằng chứng vẫn trái chiều.** 9/7 KN khi index −0.7% intraday → 8/9
+  thua (PET +3.5 thắng); nhưng 6/7 cũng KN trong phiên −1.0% → thắng 9/15. Không làm rule.
+
+**Hành động:** P7 **ĐÃ TRIỂN KHAI (user duyệt 15/07)** — trần `ALERT_MAX_PER_SECTOR = 2`
+mã/ngành (vi_sector ICB-2 từ screener) trong top-N alert (`scheduler._select_top_diversified`);
+slot dôi ra đôn mã ngành khác kế tiếp; ngành không xác định không bị chặn; alert hiển thị thêm
+ngành. Chỉ tầng alert — scoring và dashboard không đổi. Mọi thứ khác: không đổi công thức
+(beta risk; phòng thủ đúng là regime gate đã hoạt động + stop-loss).
+
+---
+
 ## Audit độ trễ 11/07/2026 (`analysis/lateness_audit.py` — chạy lại định kỳ)
 
 Trả lời câu hỏi "app còn đề xuất muộn không?" bằng cách nhìn lại lịch sử từng mã đã đề xuất:

@@ -17,6 +17,28 @@ TELEGRAM_CONFIG_PATH = os.path.join(DATA_DIR, "telegram_config.json")
 # ── Telegram hourly alerts ──────────────────────────────────────────────────────
 ALERT_TOP_N = 5             # how many top Layer-2 stocks to push per send
 ALERT_MIN_SCORE = 50.0      # only alert stocks at/above this BUY score (0 = no filter)
+# Sector cap (loss-review P7, 15/07/2026): 11/25 losses of the 9-15/07 correction were
+# brokers — an alert list concentrated in one sector dies together when that sector
+# turns. At most this many stocks per vi_sector in the alert top-N; freed slots go to
+# the next-best stocks from other sectors. Unknown sector is never capped.
+ALERT_MAX_PER_SECTOR = 2
+# LATE alerts (backtest 10y + user decision 15/07): LATE was the best-returning state
+# historically but ONLY shines in a favourable regime and has the worst tail on market
+# turns → alert BREAKOUT_LATE only while the regime gate says "ok" (never in
+# caution/blocked). Set False to restrict alerts to FRESH+PRE again.
+ALERT_LATE_IN_OK_REGIME = True
+
+# ── Market Health gating (Phase 2, backtest-passed 19/07/2026) ─────────────────────
+# GRAD X=55 trên 10 năm: TRAIN obj −0.019→+0.018, VALIDATION −1.115→−1.009 (cổng PASS,
+# ngưỡng chọn trên train, validation chưa từng dùng để chọn). Đèn vàng 3 mức:
+#   health ≥ SOFT           → bình thường
+#   HARD ≤ health < SOFT    → CHỌN LỌC: chỉ alert/ghi nhận mã BUY ≥ STRONG_SCORE
+#   health < HARD           → TẠM NGỪNG khuyến nghị mới (regime gate vẫn là phanh cuối)
+# Hiệu ứng khiêm tốn (+0.04/+0.11 objective) — tắt bằng MH_GATE_ENABLED=False.
+MH_GATE_ENABLED = True
+MH_GATE_SOFT = 55.0
+MH_GATE_HARD = 40.0
+MH_GATE_STRONG_SCORE = 65.0
 ALERT_START_HOUR = 10       # first hourly send (Vietnam time)
 ALERT_END_HOUR = 15         # last hourly send (inclusive)
 
@@ -63,8 +85,12 @@ FRESH_MAX_AGE = 1             # breakout_age ceiling for FRESH (sessions since c
 FRESH_MIN_RETURN_1D = 0.0     # reco-day return must be strictly ABOVE this (%)
 FRESH_MIN_CLOSING = 40.0      # reco-day closing strength floor (%)
 PRE_BREAKOUT_MAX_DIST = 3.0   # % below pivot to qualify as PRE_BREAKOUT
-PRE_BREAKOUT_DRYUP_MAX = 0.9  # dry-up must be tightening
-PRE_BREAKOUT_NARROWING_MAX = 0.9  # ATR must be contracting
+# P9 relaxation (backtest 10y, 15/07/2026): loosening the VCP-tightness gates from
+# <0.9 to <1.05 MORE THAN DOUBLES the PRE channel with near-identical quality —
+# TRAIN extra: n=3,176, 51% win, +0.66% T3; VALID extra: n=1,113, 54% win, +0.37% T3
+# (PRE is the most robust state: the only one positive in the 2022-23 validation).
+PRE_BREAKOUT_DRYUP_MAX = 1.05
+PRE_BREAKOUT_NARROWING_MAX = 1.05
 # Clean-coil requirement (loss-review 09/07/2026, P2): a stock that closed above
 # the pivot recently and fell back is a FAILED breakout, not a coiling setup (BMP
 # scored 78.5 as PRE right after its breakout died). No above-pivot close allowed
@@ -75,8 +101,13 @@ PRE_BREAKOUT_NO_BREAK_SESSIONS = 3
 # A non-recommended pool stock only counts as a reviewable "miss" when its T+3
 # return clears this bar — small drifts are noise, not missed swing opportunities.
 MISS_MIN_RET_T3 = 3.0   # %
+# LATE demotion softened 0.60 → 0.85 (backtest 10y, 15/07/2026): LATE outperformed
+# FRESH in BOTH periods (TRAIN regime-ok: +1.08% vs +0.35% T3; VALID: +0.15% vs
+# −0.55%) — momentum continuation works on VN; the heavy 0.60 was discarding the
+# historically best state. Kept < 1.0: LATE has the deepest MAE and dies hardest on
+# market turns (07/07 cohort).
 STATE_MULT = {"BREAKOUT_FRESH": 1.00, "PRE_BREAKOUT": 0.95,
-              "BREAKOUT_LATE": 0.60, "NONE": 0.0}
+              "BREAKOUT_LATE": 0.85, "NONE": 0.0}
 STATE_LABELS = {"BREAKOUT_FRESH": "🟢 Mua ngay", "PRE_BREAKOUT": "🔵 Sắp breakout",
                 "BREAKOUT_LATE": "🟠 Muộn", "NONE": "—"}
 
@@ -91,7 +122,13 @@ W_SETUP_STRUCTURE = {"alignment": 0.5, "slope": 0.5}
 # written to data/learned_weights.json (reversible — delete the file or set the
 # toggle False to revert). config.py itself is never rewritten. Use get_w_buy() in
 # the engine so learned weights take effect; reload_learned_weights() refreshes it.
-USE_LEARNED_WEIGHTS = True
+# DISABLED 19/07/2026: the live learner drifted W_BUY on pure noise — 367 samples all
+# from the 9-15/07 correction (win 27.5%), component correlations ±0.02 → it "learned"
+# signal 0.40→0.30 from a single-regime sample. The 10y backtest (233k rows) is the
+# authoritative source now; re-enable only after the learner is retrained on backtest
+# data (train 2016-21, validated 2022-23). Old file kept at
+# data/learned_weights.json.disabled-20260719 for reference.
+USE_LEARNED_WEIGHTS = False
 LEARNED_WEIGHTS_PATH = os.path.join(DATA_DIR, "learned_weights.json")
 LEARN_MIN_SAMPLE = 20        # need this many resolved (T+3) signals before adjusting
 LEARN_MAX_DELTA = 0.10       # a learned weight can deviate at most this far from default

@@ -27,6 +27,52 @@ TASK_TYPES = {
 }
 
 
+# vnstock_pipeline hardcodes a RELATIVE export root (CSVExport(base_path='./data/ohlcv')),
+# so output_path used to be cosmetic — files always landed in the server process's own
+# cwd while the success message claimed otherwise. Fix: run the task inside a temporary
+# staging cwd, then move what it produced into output_path.
+
+def _run_in_staging(run_callable, output_path: str):
+    """
+    Execute a pipeline task with cwd redirected to a temp dir, then move any files
+    it wrote into output_path (preserving the task's own subdirectory layout).
+
+    Returns a list of absolute paths that were written.
+    """
+    import shutil as _shutil
+    import tempfile
+
+    dest_root = os.path.abspath(os.path.expanduser(output_path))
+    os.makedirs(dest_root, exist_ok=True)
+
+    staging = tempfile.mkdtemp(prefix="vnstock_pipeline_")
+    prev_cwd = os.getcwd()
+    written = []
+    try:
+        os.chdir(staging)
+        run_callable()
+    finally:
+        os.chdir(prev_cwd)
+
+    # The task writes under <staging>/data/<task>/...; strip that "data" level so
+    # output_path itself becomes the parent of the task directory.
+    produced_root = os.path.join(staging, "data")
+    if not os.path.isdir(produced_root):
+        produced_root = staging
+
+    for dirpath, _dirnames, filenames in os.walk(produced_root):
+        for fn in filenames:
+            src_file = os.path.join(dirpath, fn)
+            rel = os.path.relpath(src_file, produced_root)
+            dest_file = os.path.join(dest_root, rel)
+            os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+            _shutil.move(src_file, dest_file)
+            written.append(dest_file)
+
+    _shutil.rmtree(staging, ignore_errors=True)
+    return written
+
+
 def run_pipeline_task(
     tickers: list,
     task_type: str = "ohlcv",
@@ -48,7 +94,8 @@ def run_pipeline_task(
             'intraday'  - Intraday tick data (current session or latest)
         start: Start date YYYY-MM-DD (required for ohlcv/intraday, ignored for financial)
         end: End date YYYY-MM-DD (required for ohlcv/intraday)
-        output_path: Directory to save CSV files (default './data')
+        output_path: Directory to save CSV files (default './data', relative to the
+                     server's working directory). Absolute paths are recommended.
         interval: OHLCV interval — '1D', '1W', '1M', '1H', '15m', '5m', '1m' (ohlcv only)
     """
     task_type = task_type.lower().strip()
@@ -66,21 +113,34 @@ def run_pipeline_task(
                 return "[ohlcv task requires start and end dates (YYYY-MM-DD)]"
 
             from vnstock_pipeline.tasks.ohlcv import run_task
-            run_task(tickers, start=start, end=end, interval=interval)
+            task = lambda: run_task(tickers, start=start, end=end, interval=interval)
 
         elif task_type == "financial":
             from vnstock_pipeline.tasks.financial import run_financial_task
-            run_financial_task(tickers)
+            task = lambda: run_financial_task(tickers)
 
-        elif task_type == "intraday":
+        else:  # intraday — EOD mode: fetch once and exit (no infinite loop)
             from vnstock_pipeline.tasks.intraday import run_intraday_task
-            # EOD mode: fetch once and exit (no infinite loop)
-            run_intraday_task(tickers, mode="EOD")
+            task = lambda: run_intraday_task(tickers, mode="EOD")
 
+        written = _run_in_staging(task, output_path)
+
+        if not written:
+            return (
+                f"## Pipeline finished but wrote no files: {task_type.upper()}\n"
+                f"Tickers: {', '.join(tickers)}\n"
+                f"Requested output: {os.path.abspath(os.path.expanduser(output_path))}\n\n"
+                "The upstream task produced no output — check that the tickers and date "
+                "range are valid, and that your license covers vnstock_pipeline."
+            )
+
+        listing = "\n".join(f"  {p}" for p in sorted(written)[:20])
+        more = f"\n  ... and {len(written) - 20} more" if len(written) > 20 else ""
         return (
             f"## Pipeline completed: {task_type.upper()}\n"
             f"Tickers: {', '.join(tickers)}\n"
-            f"Output: {output_path}/{task_type}/\n\n"
+            f"Output: {os.path.abspath(os.path.expanduser(output_path))}\n"
+            f"Files written ({len(written)}):\n{listing}{more}\n\n"
             f"Use `inspect_data_file` or `query_data_file` to explore results."
         )
 

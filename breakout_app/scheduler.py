@@ -18,7 +18,7 @@ import clock
 import store
 import notify
 from data import db, cache, fetchers
-from engine import layer1, scoring
+from engine import layer1, scoring, market_health
 
 
 def _log(msg: str):
@@ -87,10 +87,12 @@ def ensure_history(exchanges=None, min_gtgd20: float = None, min_price: float = 
             cache.save_ohlcv_bundle(tag, pd.concat(frames, ignore_index=True))
     _log(f"OHLCV ready ({len(ohlcv)} cached)")
 
-    if vnindex_close is None or len(vnindex_close) == 0 or force:
-        vnindex_df = fetchers.fetch_vnindex()
-        vnindex_close = (vnindex_df["close"].reset_index(drop=True)
-                         if not vnindex_df.empty else pd.Series(dtype=float))
+    with _hist_lock:
+        vnindex_full = _hist.get("vnindex_full") if _hist.get("date") == today else None
+    if vnindex_close is None or len(vnindex_close) == 0 or force or vnindex_full is None:
+        vnindex_full = fetchers.fetch_vnindex()
+        vnindex_close = (vnindex_full["close"].reset_index(drop=True)
+                         if not vnindex_full.empty else pd.Series(dtype=float))
 
     # Money flow (EOD, excludes today) — fetch missing symbols only, cache daily.
     missing_flow = [s for s in symbols if s not in flow]
@@ -123,7 +125,8 @@ def ensure_history(exchanges=None, min_gtgd20: float = None, min_price: float = 
 
     with _hist_lock:
         _hist.update({"sig": sig, "date": today, "universe": universe, "ohlcv": ohlcv,
-                      "vnindex": vnindex_close, "flow": flow, "static_pool": static_pool})
+                      "vnindex": vnindex_close, "vnindex_full": vnindex_full,
+                      "flow": flow, "static_pool": static_pool})
 
 
 # ── Core scan ──────────────────────────────────────────────────────────────────────
@@ -153,10 +156,26 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
             universe = _hist["universe"]
             ohlcv = _hist["ohlcv"]
             vnindex_close = _hist["vnindex"]
+            vnindex_full = _hist.get("vnindex_full")
             flow_map = dict(_hist.get("flow") or {})
             static_pool = dict(_hist.get("static_pool") or {})
         _log(f"history ready: universe={len(universe)} static_pass="
              f"{sum(1 for v in static_pool.values() if v['passed'])}")
+
+        # Refetch VNINDEX MỖI SCAN (fix 30/07): regime gate + market health chạy trên
+        # index LIVE thay vì cache buổi sáng — hết trễ intraday (đã thấy 20/07: index
+        # rơi −1.8% trong phiên mà regime vẫn 'caution' theo số liệu 8h sáng).
+        # 1 call rẻ mỗi 5 phút; lỗi mạng → dùng cache cũ.
+        try:
+            vn_fresh = fetchers.fetch_vnindex()
+            if vn_fresh is not None and not vn_fresh.empty:
+                vnindex_full = vn_fresh
+                vnindex_close = vn_fresh["close"].reset_index(drop=True)
+                with _hist_lock:
+                    _hist["vnindex"] = vnindex_close
+                    _hist["vnindex_full"] = vnindex_full
+        except Exception as e:
+            _log(f"vnindex refetch lỗi ({type(e).__name__}) — dùng cache")
 
         # Market regime gate
         regime, ratio, msg = layer1.check_market_regime(vnindex_close)
@@ -165,6 +184,8 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
 
         symbols = universe["symbol"].tolist()
         exch_map = dict(zip(universe["symbol"], universe["exchange"]))
+        sector_map = (dict(zip(universe["symbol"], universe["vi_sector"]))
+                      if "vi_sector" in universe.columns else {})
 
         # Live snapshot (money flow + static Layer-1 are cached from ensure_history)
         _log("fetching price_board…")
@@ -173,6 +194,15 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
         minutes = clock.minutes_elapsed()
 
         today = date.today()
+
+        # Market Health TRƯỚC vòng chấm điểm (Phase 2): mode gate ảnh hưởng is_reco/
+        # record; điểm vẫn publish ở store như cũ.
+        try:
+            mh = _compute_market_health(ohlcv, live_map, vnindex_full, today.isoformat())
+        except Exception as e:
+            mh = None
+            _log(f"market health: bỏ qua ({type(e).__name__}: {e})")
+        mh_mode = _mh_mode(mh)
         l1_rows, results, obs_rows = [], [], []
         for sym in symbols:
             exch = exch_map.get(sym)
@@ -201,8 +231,12 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
             base["intraday_ratio"] = intraday_ratio
             l1_rows.append({**base, "passed": live_ok, "reason": reason})
 
-            # Layer 2 scoring when regime is not blocked, OR forced manually
-            if live_ok and (regime != "blocked" or override_regime):
+            # Layer 2 scoring when regime is not blocked, OR forced manually, OR the
+            # EOD observation snapshot (fix 30/07: obs stopped accumulating for 8
+            # blocked sessions 21-29/07 — measurement must run even khi đứng ngoài;
+            # ranked/alerts vẫn bị chặn như spec ở dưới).
+            score_for_obs = record_obs and today.weekday() < 5
+            if live_ok and (regime != "blocked" or override_regime or score_for_obs):
                 df = ohlcv.get(sym)
                 hist = df[df["time"].dt.date < today].reset_index(drop=True)
                 vol_intraday = live.get("volume") or 0
@@ -214,20 +248,29 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
                 res = scoring.score_stock(sym, hist, live, vnindex_hist, flow,
                                           position_size=position_size, metrics=metrics)
                 res["exchange"] = exch
+                res["sector"] = sector_map.get(sym)
                 res["rating"] = scoring.rating(res["buy_score"])
                 # Raw 5-session net VND (for drill-down display)
                 fl = flow_map.get(sym) or {}
                 res["mom_foreign_net_5d"] = fl.get("foreign_net_5d")
                 res["mom_prop_net_5d"] = fl.get("prop_net_5d")
                 # Whole-pool observation (incl. NONE) for unbiased learning / reco-quality eval.
-                is_reco = (res.get("state") in ("BREAKOUT_FRESH", "PRE_BREAKOUT")
-                           and res["buy_score"] >= config.ALERT_MIN_SCORE)
+                # is_reco = "live có alert mã này không" → blocked luôn False.
+                is_reco = (regime != "blocked"
+                           and res.get("state") in _alert_states(regime)
+                           and res["buy_score"] >= config.ALERT_MIN_SCORE
+                           and _mh_pass(mh_mode, res["buy_score"]))
                 obs_rows.append({"symbol": sym, "state": res.get("state"),
                                  "buy_score": res["buy_score"], "liquidity": res["liquidity"],
                                  "momentum": res["momentum"], "signal": res.get("signal"),
-                                 "close": res["close"], "is_reco": is_reco})
-                # RevD: NONE = not a setup/breakout → not a recommendation, drop from ranked.
-                if res.get("state") != "NONE":
+                                 "close": res["close"], "is_reco": is_reco,
+                                 # Hướng B: metric backtest mù — tích lũy để calibrate sau
+                                 "intraday_ratio": res.get("liq_intraday_ratio"),
+                                 "foreign_net_pct": res.get("mom_foreign_net_pct"),
+                                 "prop_net_pct": res.get("mom_prop_net_pct")})
+                # RevD: NONE bị loại; và khi blocked (chấm chỉ để ghi obs) KHÔNG publish
+                # vào ranked — dashboard/alert giữ nguyên hành vi spec.
+                if res.get("state") != "NONE" and (regime != "blocked" or override_regime):
                     results.append(res)
 
         layer1_df = pd.DataFrame(l1_rows)
@@ -242,7 +285,14 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
         store.update(layer1=layer1_df, ranked=ranked, last_scan=ts, status="idle",
                      universe_total=len(symbols), universe_passed=passed_count)
         db.save_snapshots(ts.isoformat(timespec="seconds"), ranked, regime)
-        _record_signals(ranked, today.isoformat())
+        _record_signals(ranked, today.isoformat(), regime, mh_mode)
+        # Market Health (Phase 2: gate ACTIVE — mode ảnh hưởng alert/tracking/is_reco)
+        if mh:
+            store.update(market_health={**mh, "mode": mh_mode})
+            db.save_market_health(today.isoformat(), mh)
+            _log(f"market health: {mh['health']}/100 {mh['label']} · mode={mh_mode} "
+                 f"(phân phối {mh['dist_days']} · breadth {mh['breadth_pct']}% · "
+                 f"canary {mh['canary_pct']}% · index {mh['index_ratio']})")
         if record_obs and obs_rows and today.weekday() < 5:   # no weekend artifacts
             n_obs = db.record_observations(today.isoformat(), obs_rows)
             _log(f"observations: +{n_obs} mã pool ghi nhận EOD ({today.isoformat()})")
@@ -255,15 +305,16 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
         raise
 
 
-def _record_signals(ranked, reco_date: str):
-    """Phase 3: log each stock the app RECOMMENDS today (actionable states ≥ threshold)
-    into `tracked_signals` — INSERT OR IGNORE so reco_close is the FIRST crossing today."""
+def _record_signals(ranked, reco_date: str, regime: str = "ok", mh_mode: str = "normal"):
+    """Phase 3: log each stock the app RECOMMENDS today (alertable states ≥ threshold,
+    qua đèn vàng MH) into `tracked_signals` — INSERT OR IGNORE, first crossing wins."""
     if date.today().weekday() >= 5:      # weekend scans replay Friday's data → junk signals
         return
     if ranked is None or ranked.empty or "state" not in ranked.columns:
         return
-    rec = ranked[(ranked["state"].isin(["BREAKOUT_FRESH", "PRE_BREAKOUT"]))
-                 & (ranked["buy_score"] >= config.ALERT_MIN_SCORE)]
+    rec = ranked[(ranked["state"].isin(_alert_states(regime)))
+                 & (ranked["buy_score"] >= config.ALERT_MIN_SCORE)
+                 & (ranked["buy_score"].map(lambda b: _mh_pass(mh_mode, b)))]
     if rec.empty:
         return
     rows = [{
@@ -312,6 +363,42 @@ def _update_observation_outcomes():
         _log(f"observations: cập nhật outcome cho {updated} mã pool")
 
 
+def _milestone_reminders():
+    """Nhắc MỘT LẦN qua Telegram khi dữ liệu live tích lũy đủ cho các việc đã hoãn
+    (quyết định 19/07 — DEVELOPMENT #40). Cờ chống lặp lưu app_state."""
+    import sqlite3
+    milestones = [
+        ("reminder_huong_A_drift_alarm",
+         "SELECT COUNT(*) FROM tracked_signals t JOIN signal_outcomes o "
+         "ON o.symbol=t.symbol AND o.reco_date=t.reco_date "
+         "WHERE t.reco_date >= '2026-07-20' AND o.win_t3 IS NOT NULL",
+         150,
+         "🔔 Breakout Screener: đã đủ ≥150 tín hiệu live có kết quả T+3 (sau 20/07) — "
+         "đến lúc triển khai HƯỚNG A: Drift Alarm (so rolling win-rate live với dải "
+         "kỳ vọng backtest, báo động khi lệch). Nhắc Claude: 'triển khai drift alarm'."),
+        ("reminder_huong_B_band_calib",
+         "SELECT COUNT(*) FROM daily_observations WHERE foreign_net_pct IS NOT NULL "
+         "AND win_t3 IS NOT NULL",
+         15000,
+         "🔔 Breakout Screener: daily_observations đã tích lũy ≥15,000 dòng có dữ liệu "
+         "flow + kết quả T+3 — đủ để calibrate band INTRADAY/FLOW (Hướng B, phần backtest "
+         "mù). Nhắc Claude: 'calibrate band intraday/flow từ dữ liệu live'."),
+    ]
+    try:
+        c = sqlite3.connect(config.DB_PATH)
+        for flag, sql, threshold, msg in milestones:
+            if db.get_state(flag):
+                continue
+            n = c.execute(sql).fetchone()[0]
+            if n >= threshold:
+                db.set_state(flag, {"reached": str(date.today()), "count": int(n)})
+                _log(f"MILESTONE: {flag} đạt ({n} ≥ {threshold}) — đã gửi nhắc")
+                notify.send_telegram(msg + f"\n(hiện có {n:,} mẫu)")
+        c.close()
+    except Exception as e:
+        _log(f"milestone check bỏ qua ({type(e).__name__})")
+
+
 def _flow_pct(net: dict, hist: pd.DataFrame):
     """Spec 3.2.4.2 net-% = 5-session net value / 5-session turnover × 100."""
     if not net:
@@ -331,6 +418,100 @@ def _flow_pct(net: dict, hist: pd.DataFrame):
 _REGIME_LABEL = {"ok": "🟢 UPTREND", "caution": "🟡 CAUTION", "blocked": "🔴 DOWNTREND"}
 
 
+def _compute_market_health(ohlcv: dict, live_map: dict, vnindex_df, today_iso: str):
+    """Điểm Sức khỏe thị trường (observe-only). Trả dict từ market_health.score_...
+
+    - dist_days: từ VN-Index OHLCV (cần cột volume).
+    - breadth: % mã pool có giá hiện tại > MA20 (lịch sử EOD + close live hôm nay).
+    - canary: % tín hiệu KN 1-2 phiên gần nhất còn ≥ close ngày KN (giá live)."""
+    import pandas as pd
+    closes = {}
+    for sym, df in ohlcv.items():
+        live = live_map.get(sym) or {}
+        cl = live.get("close")
+        if df is None or df.empty or not cl:
+            continue
+        hist_close = df[df["time"].dt.strftime("%Y-%m-%d") < today_iso]["close"]
+        closes[sym] = pd.concat([hist_close, pd.Series([float(cl)])], ignore_index=True)
+    breadth = market_health.breadth_above_ma20(closes)
+
+    dist = market_health.count_distribution_days(vnindex_df) if vnindex_df is not None else 0
+
+    canary = None
+    entries = db.recent_reco_entries(today_iso, n_days=2)
+    ok = tot = 0
+    for sym, rd in entries:
+        live = live_map.get(sym) or {}
+        cl = live.get("close")
+        entry = db.close_on(sym, rd)
+        if not cl or not entry:
+            continue
+        tot += 1
+        if float(cl) >= float(entry):
+            ok += 1
+    if tot >= 3:                        # cần tối thiểu vài tín hiệu mới có nghĩa
+        canary = ok / tot * 100
+
+    ratio = float("nan")
+    if vnindex_df is not None and len(vnindex_df) >= 20:
+        ma20 = float(vnindex_df["close"].iloc[-20:].mean())
+        if ma20:
+            ratio = float(vnindex_df["close"].iloc[-1]) / ma20
+    return market_health.score_market_health(dist, breadth, canary, ratio)
+
+
+def _mh_mode(mh) -> str:
+    """Chế độ đèn vàng theo điểm Sức khỏe thị trường (Phase 2, backtest-passed):
+    normal / selective (chỉ mã BUY ≥ MH_GATE_STRONG_SCORE) / halt (ngừng KN mới)."""
+    if not config.MH_GATE_ENABLED or not mh:
+        return "normal"
+    h = mh.get("health")
+    if h is None:
+        return "normal"
+    if h < config.MH_GATE_HARD:
+        return "halt"
+    if h < config.MH_GATE_SOFT:
+        return "selective"
+    return "normal"
+
+
+def _mh_pass(mode: str, buy_score: float) -> bool:
+    """Một mã có qua được đèn vàng không (dùng chung cho alert + tracking + is_reco)."""
+    if mode == "halt":
+        return False
+    if mode == "selective":
+        return buy_score >= config.MH_GATE_STRONG_SCORE
+    return True
+
+
+def _alert_states(regime: str) -> list:
+    """Các state được phép alert theo regime (backtest 10y + quyết định 15/07):
+    LATE chỉ trong regime 'ok' — nơi duy nhất nó tỏa sáng; caution/blocked thì không."""
+    states = ["BREAKOUT_FRESH", "PRE_BREAKOUT"]
+    if config.ALERT_LATE_IN_OK_REGIME and regime == "ok":
+        states.append("BREAKOUT_LATE")
+    return states
+
+
+def _select_top_diversified(df, top_n: int, max_per_sector: int):
+    """Pick the top-N by score with at most ``max_per_sector`` per vi_sector (P7).
+
+    Iterates in ranked order; a stock whose sector quota is full is skipped and its
+    slot goes to the next-best stock from another sector. Stocks with unknown
+    sector are never capped (can't distinguish them)."""
+    picked, count = [], {}
+    for idx, r in df.iterrows():
+        sec = r.get("sector")
+        if sec and count.get(sec, 0) >= max_per_sector:
+            continue
+        picked.append(idx)
+        if sec:
+            count[sec] = count.get(sec, 0) + 1
+        if len(picked) >= top_n:
+            break
+    return df.loc[picked]
+
+
 def _timing_note(r) -> str:
     """One-line RevD timing context for the alert (why it's actionable now)."""
     state = r.get("state")
@@ -345,7 +526,10 @@ def _timing_note(r) -> str:
         ratio = r.get("bo_breakout_ratio")
         age_txt = f"vừa vượt hôm nay" if age == 0 else f"đã vượt {age} phiên trước"
         r_txt = f" (+{(ratio - 1) * 100:.1f}% trên đỉnh)" if ratio and ratio == ratio else ""
-        return f"↳ {age_txt}{r_txt}{rsi_txt}"
+        warn = ("\n   ⚠️ <i>Muộn — momentum tiếp diễn: chỉ hợp lệ khi thị trường thuận; "
+                "rủi ro khóa T+2.5 cao nhất, cân nhắc vị thế nhỏ + stop chặt</i>"
+                if state == "BREAKOUT_LATE" else "")
+        return f"↳ {age_txt}{r_txt}{rsi_txt}{warn}"
     return f"↳ {rsi_txt.lstrip(' ·')}" if rsi_txt else ""
 
 
@@ -356,8 +540,10 @@ def _format_alert(df, regime: str) -> str:
              "<b>Top mã khuyến nghị mới (chưa gửi hôm nay):</b>"]
     for i, (_, r) in enumerate(df.iterrows(), 1):
         state = r.get("state_label", "")
+        sector = r.get("sector")
+        exch = f"{r['exchange']} · {sector}" if sector else r["exchange"]
         lines.append("")
-        lines.append(f"{i}. {state} <b>{r['symbol']}</b> ({r['exchange']}) — "
+        lines.append(f"{i}. {state} <b>{r['symbol']}</b> ({exch}) — "
                      f"BUY {r['buy_score']:.1f} ({r['rating']})")
         lines.append(f"   TK {r['liquidity']:.0f} · ĐL {r['momentum']:.0f} · "
                      f"Tín hiệu {r.get('signal', 0):.0f} · giá {r['close']:,.0f}")
@@ -387,26 +573,40 @@ def _alert_job_inner():
         _log("alert: Telegram chưa cấu hình (data/telegram_config.json) — bỏ qua")
         return
 
-    ranked = store.get()["ranked"]
-    regime = store.get()["regime"]
+    s = store.get()
+    ranked = s["ranked"]
+    regime = s["regime"]
+    mh = s.get("market_health") or {}
+    mh_mode = _mh_mode(mh)
+    if mh_mode == "halt":
+        _log(f"alert: Sức khỏe TT {mh.get('health')}/100 < {config.MH_GATE_HARD} "
+             "— tạm ngừng khuyến nghị mới (đèn vàng Phase 2)")
+        return
     if ranked is None or ranked.empty:
         _log("alert: chưa có kết quả Layer 2 — bỏ qua")
         return
 
     today = date.today().isoformat()
     sent = db.already_sent(today)
-    # RevD: only alert ACTIONABLE/EARLY states (fresh breakout + pre-breakout);
-    # de-emphasize LATE (already flagged and down-scored). Take the top-N by score
-    # FIRST, then drop any already sent today (don't back-fill with weaker names).
-    actionable = ranked[ranked.get("state", "").isin(["BREAKOUT_FRESH", "PRE_BREAKOUT"])] \
+    # RevD: alert FRESH + PRE luôn; LATE chỉ khi regime 'ok' (_alert_states). Take the
+    # top-N by score FIRST — with the P7 sector cap so one hot sector can't fill the
+    # whole list — then drop any already sent today (don't back-fill with weaker names).
+    actionable = ranked[ranked.get("state", "").isin(_alert_states(regime))] \
         if "state" in ranked.columns else ranked
-    top = actionable[actionable["buy_score"] >= config.ALERT_MIN_SCORE].head(config.ALERT_TOP_N)
+    min_buy = (config.MH_GATE_STRONG_SCORE if mh_mode == "selective"
+               else config.ALERT_MIN_SCORE)
+    eligible = actionable[actionable["buy_score"] >= min_buy]
+    top = _select_top_diversified(eligible, config.ALERT_TOP_N, config.ALERT_MAX_PER_SECTOR)
     fresh = top[~top["symbol"].isin(sent)]
     if fresh.empty:
         _log("alert: top-N đều đã gửi hoặc dưới ngưỡng — bỏ qua")
         return
 
-    if not notify.send_telegram(_format_alert(fresh, regime)):
+    msg = _format_alert(fresh, regime)
+    if mh_mode == "selective":
+        msg += (f"\n<i>⚕️ Sức khỏe TT {mh.get('health')}/100 — chế độ CHỌN LỌC: "
+                f"chỉ gửi mã BUY ≥ {config.MH_GATE_STRONG_SCORE:.0f}</i>")
+    if not notify.send_telegram(msg):
         _log("alert: gửi Telegram thất bại (kiểm tra token/chat_id)")
         return
     db.mark_sent(today, list(zip(fresh["symbol"], fresh["buy_score"])))
@@ -445,14 +645,10 @@ def _eod_job():
         run_full_scan(record_obs=True)     # snapshot whole Layer-1 pool at EOD
         _update_outcomes()                 # recommended signals (tracked_signals)
         _update_observation_outcomes()     # whole pool (daily_observations)
-        try:
-            from analysis import learn_weights
-            meta = learn_weights.learn_and_save()
-            if meta:
-                _log(f"weights: W_BUY tự chỉnh {meta['weights']} từ {meta['n_samples']} "
-                     f"mã pool (win T+3 {meta['win_rate']*100:.0f}%)")
-        except Exception as e:
-            _log(f"weights: bỏ qua auto-tune ({type(e).__name__})")
+        # (Auto-learner W_BUY đã KHAI TỬ 19/07 — tiền đề bị bác bởi chiến dịch
+        #  calibrate 233k mẫu: mặt objective phẳng quanh trọng số hiện tại, learner
+        #  nhỏ giọt chỉ có thể học nhiễu. Xem DEVELOPMENT #37/#38/#40.)
+        _milestone_reminders()
     except Exception:
         pass
 

@@ -55,7 +55,8 @@ def fetch_universe(exchanges=None, min_gtgd20: float = None) -> pd.DataFrame:
     clears the pre-filter floor (≈70% of ``min_gtgd20``, a buffer below the exact
     Layer-1 GTGD20 threshold so no borderline name is dropped). The only cap is
     ``config.MAX_UNIVERSE``, a safety ceiling that is not expected to bind.
-    Returns columns: symbol, exchange, avg_value_30d (sorted by liquidity desc).
+    Returns columns: symbol, exchange, avg_value_30d, vi_sector (ICB-2 Vietnamese
+    sector label, used by the alert sector cap), sorted by liquidity desc.
     """
     selected = [e.upper() for e in (exchanges or config.DEFAULT_EXCHANGES)]
     floor = (min_gtgd20 if min_gtgd20 is not None else config.MIN_GTGD20) * 0.7
@@ -72,7 +73,9 @@ def fetch_universe(exchanges=None, min_gtgd20: float = None) -> pd.DataFrame:
         try:
             df = ins.screener.filter(filters=filters, limit=2000)
             if df is not None and not df.empty:
-                frames.append(df[["symbol", "exchange", "avg_value_30d"]])
+                if "vi_sector" not in df.columns:      # older API shape
+                    df = df.assign(vi_sector=None)
+                frames.append(df[["symbol", "exchange", "avg_value_30d", "vi_sector"]])
         except Exception:
             continue
 
@@ -95,7 +98,8 @@ def _fallback_universe(selected) -> pd.DataFrame:
     df = df[(df.get("type") == "STOCK") & (df["exchange"].str.upper().isin(want))].copy()
     df["exchange"] = df["exchange"].str.upper().replace({"HSX": "HOSE"})
     df["avg_value_30d"] = float("nan")
-    return df[["symbol", "exchange", "avg_value_30d"]].head(config.MAX_UNIVERSE).reset_index(drop=True)
+    df["vi_sector"] = None
+    return df[["symbol", "exchange", "avg_value_30d", "vi_sector"]].head(config.MAX_UNIVERSE).reset_index(drop=True)
 
 
 # ── OHLCV ──────────────────────────────────────────────────────────────────────────

@@ -1,4 +1,14 @@
-"""Auto-tune W_BUY from objective T+3 outcomes (RevD Phase 4 extension).
+"""[DEPRECATED 19/07/2026 — KHÔNG CÒN ĐƯỢC GỌI]
+
+Khai tử sau 2 bằng chứng: (1) sự cố regime-bias — learner hạ signal 0.40→0.30 từ
+367 mẫu toàn kỳ điều chỉnh với tương quan ±0.02 (nhiễu thuần); (2) chiến dịch
+calibrate 10 năm/233k mẫu chứng minh mặt objective PHẲNG quanh trọng số hiện tại —
+learner nhỏ giọt về nguyên tắc chỉ có thể học nhiễu. Giữ file làm tư liệu.
+Vai trò "học từ live" được thay bằng: chuông báo trôi dạt (drift alarm) + calibrate
+band intraday/flow khi daily_observations tích lũy đủ (DEVELOPMENT #40).
+
+--- Docstring gốc ---
+Auto-tune W_BUY from objective T+3 outcomes (RevD Phase 4 extension).
 
 Driven by `win_t3` (the app already computes lãi/lỗ at T+3), so **no manual feedback
 is required**. For each top-level BUY component (liquidity, momentum, signal) it

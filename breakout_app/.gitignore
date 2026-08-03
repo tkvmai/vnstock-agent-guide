@@ -6,5 +6,6 @@ data/claude_bundles/
 data/telegram_config.json
 data/claude_config.json
 data/learned_weights.json
+data/history/
 __pycache__/
 *.pyc

@@ -195,6 +195,35 @@ def test_pre_breakout_detection():
     assert setup.is_pre_breakout(95.0, {**bo, "pivot": 100.0}, mom) is False
 
 
+def test_market_health_components():
+    from engine import market_health as MH
+    # Distribution days: down >0.2% on higher volume counts, else not
+    idx = pd.DataFrame({
+        "close":  [100, 99.5, 99.6, 99.0, 99.2],   # −0.5%(dist?), +0.1, −0.6, +0.2
+        "volume": [1e6, 2e6, 1.5e6, 3e6, 1e6],
+    })
+    assert MH.count_distribution_days(idx) == 2     # bars 2 (−0.5% vol↑) & 4 (−0.6% vol↑)
+    # O'Neil expiry (Phase 2): rally +5% từ close phiên phân phối → phiên đó bị xóa
+    idx2 = pd.DataFrame({
+        "close":  [100, 99.5, 105.0, 104.0, 104.2],  # dist tại bar 1, sau đó rally >5%
+        "volume": [1e6, 2e6, 1.5e6, 3e6, 1e6],
+    })
+    assert MH.count_distribution_days(idx2) == 1     # bar 1 hết hạn; chỉ còn bar 3 (−0.95% vol↑)
+    # Breadth
+    up = pd.Series(list(np.linspace(90, 100, 30)))          # above its MA20
+    down = pd.Series(list(np.linspace(110, 95, 30)))        # below its MA20
+    b = MH.breadth_above_ma20({"A": up, "B": down})
+    assert b == 50.0
+    # Composite monotonic: healthy vs fragile
+    good = MH.score_market_health(0, 80.0, 80.0, 1.02)
+    bad = MH.score_market_health(5, 20.0, 10.0, 0.96)
+    assert good["health"] > 85 and bad["health"] < 35
+    assert good["health"] > bad["health"]
+    # Missing inputs → neutral, no crash
+    mid = MH.score_market_health(2, float("nan"), None, float("nan"))
+    assert 50 <= mid["health"] <= 90
+
+
 def test_rating_labels():
     assert scoring.rating(90) == "Rất mạnh"
     assert scoring.rating(70) == "Khá"

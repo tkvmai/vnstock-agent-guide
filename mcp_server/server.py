@@ -99,13 +99,13 @@ def with_timeout(func):
     return wrapper
 
 # Import tool functions
-from tools.market_data import get_stock_price, get_intraday, get_market_overview, get_price_board, get_foreign_trade, get_insider_deals
-from tools.fundamentals import get_company_info, get_financial_ratios, get_income_statement, get_balance_sheet, get_cash_flow, get_shareholders, get_company_officers, get_company_events
-from tools.screening import screen_stocks, get_index_members, get_stocks_by_industry, get_industry_list, get_money_flow, get_market_sentiment, get_screener_criteria, filter_stocks
+from tools.market_data import get_stock_price, get_intraday, get_market_overview, get_price_board, get_foreign_trade, get_insider_deals, get_stock_summary, get_proprietary_flow
+from tools.fundamentals import get_company_info, get_financial_ratios, get_income_statement, get_balance_sheet, get_cash_flow, get_shareholders, get_company_officers, get_company_events, get_company_news
+from tools.screening import screen_stocks, get_index_members, get_stocks_by_industry, get_industry_list, get_money_flow, get_market_sentiment, get_screener_criteria, filter_stocks, get_market_valuation
 from tools.technical import get_technical_indicators
-from tools.news import get_news, get_trending_keywords, search_news, get_news_sources
+from tools.news import get_news, get_trending_keywords, search_news, get_news_sources, get_article, get_news_archive
 from tools.portfolio import compare_stocks, get_correlation
-from tools.macro import get_macro_indicator, get_commodity_price
+from tools.macro import get_macro_indicator, get_commodity_price, get_commodity_impact
 from tools.pipeline import run_pipeline_task, inspect_data_file, query_data_file
 
 # Initialize MCP server
@@ -126,6 +126,8 @@ mcp.tool()(with_timeout(get_market_overview))
 mcp.tool()(with_timeout(get_price_board))
 mcp.tool()(with_timeout(get_foreign_trade))
 mcp.tool()(with_timeout(get_insider_deals))
+mcp.tool()(with_timeout(get_stock_summary))
+mcp.tool()(with_timeout(get_proprietary_flow))
 
 # ── Group 2: Fundamental Analysis ────────────────────────────────────────────
 mcp.tool()(with_timeout(get_company_info))
@@ -136,6 +138,7 @@ mcp.tool()(with_timeout(get_cash_flow))
 mcp.tool()(with_timeout(get_shareholders))
 mcp.tool()(with_timeout(get_company_officers))
 mcp.tool()(with_timeout(get_company_events))
+mcp.tool()(with_timeout(get_company_news))
 
 # ── Group 3: Stock Screening ─────────────────────────────────────────────────
 mcp.tool()(with_timeout(screen_stocks))
@@ -146,15 +149,26 @@ mcp.tool()(with_timeout(get_money_flow))
 mcp.tool()(with_timeout(get_market_sentiment))
 mcp.tool()(with_timeout(get_screener_criteria))
 mcp.tool()(with_timeout(filter_stocks))
+mcp.tool()(with_timeout(get_market_valuation))
 
 # ── Group 4: Technical Analysis ──────────────────────────────────────────────
 mcp.tool()(with_timeout(get_technical_indicators))
 
 # ── Group 5: News & Sentiment ────────────────────────────────────────────────
-mcp.tool()(with_timeout(get_news))
-mcp.tool()(with_timeout(search_news))
-mcp.tool()(with_timeout(get_trending_keywords))
-mcp.tool()(with_timeout(get_news_sources))
+# NOT routed through the vnstock worker. These tools need only vnstock_news +
+# aiohttp — none of vnstock's warm in-process state — so the worker bought them
+# nothing while imposing its two costs: the shared 25s per-call budget (a
+# sitemap crawl legitimately needs longer, and used to be killed with NOTHING
+# returned) and head-of-line blocking (one slow news call stalled every
+# market-data call behind it in the single worker queue). They enforce their own
+# wall-clock deadline internally and always return partial results instead of
+# hanging, so running them in FastMCP's own threadpool is bounded and isolated.
+mcp.tool()(get_news)
+mcp.tool()(search_news)
+mcp.tool()(get_trending_keywords)
+mcp.tool()(get_news_sources)
+mcp.tool()(get_article)
+mcp.tool()(get_news_archive)
 
 # ── Group 6: Portfolio & Risk ────────────────────────────────────────────────
 mcp.tool()(with_timeout(compare_stocks))
@@ -163,6 +177,7 @@ mcp.tool()(with_timeout(get_correlation))
 # ── Group 7: Macro & Commodities ─────────────────────────────────────────────
 mcp.tool()(with_timeout(get_macro_indicator))
 mcp.tool()(with_timeout(get_commodity_price))
+mcp.tool()(with_timeout(get_commodity_impact))
 
 # ── Group 8: Pipeline & Data Files ───────────────────────────────────────────
 mcp.tool()(with_timeout(run_pipeline_task))
@@ -187,4 +202,21 @@ if __name__ == "__main__":
     # 2-3 minutes. Bounded so a stuck worker can't hang startup — mcp.run()
     # proceeds regardless and the adaptive per-call timeout covers the rest.
     wait_until_warm(float(os.environ.get("VNSTOCK_WARM_WAIT", "60")))
-    mcp.run()
+
+    # Transport. Default stays stdio (one private server per client, spawned by
+    # the client itself). Set VNSTOCK_MCP_TRANSPORT=http to run instead as a
+    # single shared long-lived service that every Claude session connects to
+    # over HTTP: the cold start above is then paid ONCE, at service start,
+    # rather than by every session — which matters because concurrent cold
+    # starts contend on the same slow Windows native-extension import and make
+    # each other worse (that contention is what makes sessions miss the
+    # client's connect timeout and drop the server entirely).
+    _transport = os.environ.get("VNSTOCK_MCP_TRANSPORT", "stdio").lower()
+    if _transport in ("http", "streamable-http", "sse"):
+        mcp.run(
+            transport=_transport,
+            host=os.environ.get("VNSTOCK_MCP_HOST", "127.0.0.1"),
+            port=int(os.environ.get("VNSTOCK_MCP_PORT", "8790")),
+        )
+    else:
+        mcp.run()

@@ -56,6 +56,17 @@ _warm_event = None      # mp.Event the worker sets once it is warm & serving
 _warmup = None          # (func, args, kwargs) the worker runs at startup
 _call_counter = itertools.count()
 
+# Result routing. Under HTTP transport a single server is shared by every
+# Claude session on the machine, so several tool calls can be in flight at
+# once (FastMCP already runs sync tools in a threadpool). One reader thread
+# owns _outq and hands each result to the caller that asked for it, keyed by
+# call_id. The previous design had every caller read _outq directly and drop
+# anything that wasn't its own call_id — with concurrent callers that silently
+# discards other callers' results and hangs them until timeout.
+_pending_lock = threading.Lock()
+_pending = {}           # call_id -> queue.SimpleQueue for that call's result
+_generation = 0         # bumped whenever the worker (and its queues) is replaced
+
 
 def _worker_loop(inq, outq, warmup=None, warm_event=None):
     # Pre-warm INSIDE the worker, before it serves the queue. vnstock's first
@@ -87,34 +98,62 @@ def _worker_loop(inq, outq, warmup=None, warm_event=None):
             outq.put((call_id, "error", f"{type(e).__name__}: {e}"))
 
 
-def _await_result(outq, call_id, timeout):
-    """Block until `call_id`'s result appears on `outq`, discarding any earlier
-    stale results from abandoned calls. Returns (status, value), or None on
-    timeout."""
-    deadline = time.time() + timeout
+def _reader_loop(outq, generation):
+    """Drain `outq` and deliver each result to the caller waiting on that
+    call_id. Exits once its worker generation has been replaced.
+
+    Results whose caller already gave up (timed out) find no pending slot and
+    are simply dropped — the same "a late result never reaches FastMCP twice"
+    guarantee the old inline discard gave us, but without stealing results
+    belonging to other in-flight callers.
+    """
     while True:
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            return None
+        with _lock:
+            if generation != _generation:
+                return
         try:
-            got_id, status, value = outq.get(timeout=remaining)
+            call_id, status, value = outq.get(timeout=1.0)
         except queue.Empty:
-            return None
-        if got_id == call_id:
-            return status, value
-        # Stale result from an earlier abandoned call -- not ours, keep waiting.
+            continue
+        except (EOFError, OSError):
+            return
+        with _pending_lock:
+            slot = _pending.pop(call_id, None)
+        if slot is not None:
+            slot.put((status, value))
+
+
+def _await_result(slot, call_id, timeout):
+    """Block until this call's result is delivered. Returns (status, value),
+    or None on timeout (deregistering the slot so a late result is dropped)."""
+    try:
+        return slot.get(timeout=timeout)
+    except queue.Empty:
+        with _pending_lock:
+            _pending.pop(call_id, None)
+        return None
 
 
 def _ensure_worker_locked():
-    global _worker, _inq, _outq, _warm_event
+    global _worker, _inq, _outq, _warm_event, _generation
     if _worker is not None and _worker.is_alive():
         return
     _inq = mp.Queue()
     _outq = mp.Queue()
     _warm_event = mp.Event()
+    _generation += 1
+    # Callers waiting on the dead worker will never be answered — fail them
+    # now rather than making each one sit out its full timeout.
+    with _pending_lock:
+        orphaned = list(_pending.values())
+        _pending.clear()
+    for slot in orphaned:
+        slot.put(("error", "worker process died before returning a result"))
     _worker = mp.Process(target=_worker_loop,
                          args=(_inq, _outq, _warmup, _warm_event), daemon=True)
     _worker.start()
+    threading.Thread(target=_reader_loop, args=(_outq, _generation),
+                     daemon=True).start()
 
 
 def start_worker(warmup=None):
@@ -185,8 +224,12 @@ def run_with_timeout(func, args=(), kwargs=None, timeout=None):
     with _lock:
         _ensure_worker_locked()
         call_id = next(_call_counter)
+        slot = queue.SimpleQueue()
+        # Register before dispatching, so the reader thread can never deliver
+        # this result before we are listening for it.
+        with _pending_lock:
+            _pending[call_id] = slot
         _inq.put((call_id, func, args, kwargs))
-        outq = _outq
         warm_event = _warm_event
 
     # Give calls that land during the worker's (slow, variable) cold-start a
@@ -196,7 +239,7 @@ def run_with_timeout(func, args=(), kwargs=None, timeout=None):
         warm = warm_event is not None and warm_event.is_set()
         timeout = _TIMEOUT if warm else _COLD_TIMEOUT
 
-    result = _await_result(outq, call_id, timeout)
+    result = _await_result(slot, call_id, timeout)
     if result is None:
         return (
             f"Error: {func.__name__} timed out after {timeout}s — "

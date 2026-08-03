@@ -545,6 +545,171 @@ Restarting: Ctrl+C the server, re-run `run.py`, hard-refresh the browser (Ctrl+F
     multiplied into BUY alongside overheat/state (`breakout.py` computes `dist_to_high` =
     close vs max of fetched history ≈ 4 months; shown in the drill-down timing section).
     Soft penalty, reversible; 16/16 engine tests. The 10 RevC cases registered in loss_reviews.
+30. **P7 sector cap in alerts (user-approved 15/07).** The 9-15/07 market correction (VN-Index
+    −3.8%/5 sessions) killed the 07-09/07 cohorts; 11/25 losses were brokers — an alert list
+    concentrated in one sector dies together. Fix (ALERT layer only): `fetch_universe` now also
+    returns `vi_sector` (ICB-2 Vietnamese label from `screener.filter`; fallback None),
+    `run_full_scan` attaches it as `sector`, and `_alert_job` picks the top-N via
+    `_select_top_diversified` — at most `config.ALERT_MAX_PER_SECTOR` (2) per sector, freed
+    slots go to next-best other-sector names, unknown sector never capped, then the existing
+    no-backfill dedup applies. Alert lines show the sector. Verified on a replica of the 08/07
+    list: old top-5 had 3 brokers → new pick = 2 brokers + 2 banks + 1 real-estate. Scoring,
+    dashboard, tracking unchanged. Requires app restart to take effect.
+31. **Market Health layer — phase 1, OBSERVE-ONLY (user-approved 15/07).** Answers "can
+    corrections be foreseen?": timing no, fragility partially. `engine/market_health.py` (pure):
+    health = 0.30·dist + 0.30·breadth + 0.20·canary + 0.20·index — dist = O'Neil distribution
+    days (VNINDEX down >0.2% on higher volume, 25 sessions), breadth = % pool above own MA20,
+    canary = % of last-2-days recos still ≥ reco-day close (leadership failure = earliest
+    signal), index = close/MA20. Wiring: `scheduler._compute_market_health` runs each scan
+    (vnindex_full cached in _hist), logs + `store.market_health` + `db.market_health` history
+    table; regime banner shows the score. **NO gating** — and the backtest
+    (`analysis/market_health_backtest.py`, 23 sessions) says correctly so: the score DID
+    collapse through the July correction (46→34→30→19→18) and warned by 09/07, BUT (a) the
+    naive dist count saturates at 6-7 even in the June uptrend (needs O'Neil expiry-on-rally
+    rules), (b) readings near the top (01/07: 70, 07/07: 58) show canary lags at euphoric tops,
+    (c) health<55 days actually had BETTER index T+3 than ≥55 days on this tiny sample.
+    Phase 2 (gating/modulating alerts) only after more history + dist-expiry refinement.
+    17/17 engine tests.
+32. **Full-history backtest — Phase A data foundation (user-approved 15/07).** Goal: replay the
+    whole recommendation engine over ~10 years instead of drip-feeding live validation.
+    `analysis/fetch_full_history.py` fetched EVERY 3-char stock on HSX+HNX+**DELISTED**
+    (survivorship-bias mitigation; bonds/CWs excluded) + VNINDEX: **876/925 symbols ok,
+    1.52M rows, 35 MB parquet** (one file per symbol in `data/history/`, full-VND scaled,
+    resume-friendly, manifest at `_manifest.json`). Coverage: equities reach back to
+    2014-2016 (median start 2016-04; 577 symbols alive mid-2016 → 822 mid-2022); VNINDEX
+    2014→now (3,124 sessions); 49 empty (mostly pre-2015 delistings). Practical backtest
+    window: **2016→2026**. Known approximations for Phase B (documented up-front): EOD-only
+    replay (no intraday volume_ratio/filter#6/first-crossing price → entry = close), no
+    foreign/prop flow (score_flow neutral, ~5% of BUY), adjusted prices → use liquidity
+    PERCENTILE per date for the universe rather than fixed-VND thresholds; anti-overfit
+    protocol: train 2016-21 / validation 2022-23 / holdout 2024-26 (untouched until final).
+33. **Backtest Phase B — daily replay runner (`analysis/backtest.py`).** Replays the UNMODIFIED
+    `engine/scoring.score_stock` day-by-day over the history store: point-in-time universe =
+    top `--top` (120) by GTGD20 computed from data up to that day (incl. delisted symbols),
+    CV<200 filter, MIN_BARS 65; EOD approximations per #32 (intraday_ratio pinned at 100 —
+    constant across symbols so ranking unaffected; flow=None). Records the WHOLE scored pool
+    (state NONE included) with ~37 columns of raw metrics + forward outcomes (ret_t1/2/3/5/10,
+    MFE5/MAE5 from the same adjusted series) into `data/backtest/bt_<year>.parquet` —
+    resume-per-year (delete a year file to recompute it). Speed ~1.3s/session ≈ 1h for
+    2016-2026. Sanity slice (Jan-Feb 2024): 4,560 rows, states 81% NONE / 10% FRESH / 5% LATE
+    / 3.4% PRE; recommendations won 52% (+0.52% T+3). `analysis/backtest_report.py` = Phase C
+    entry point: by-state/band/year cuts + quick ablations on stored metrics; **holdout
+    2024-26 locked behind --unlock-holdout** (single final confirmation only).
+34. **Manipulation blacklist for backtest hygiene (user request 15/07).**
+    `analysis/manipulation_blacklist.py`: officially-concluded manipulation cases on the VN
+    market — FLC group (Trịnh Văn Quyết, sentenced 7/2024: FLC/ROS/AMD/KLF/ART/HAI/GAB),
+    Louis Holdings (Đỗ Thành Nhân, 5/2023: TGG/BII + ecosystem APG/AGM/LDP/DDV/SMT windowed
+    2021-22), APEC (Nguyễn Đỗ Lăng, prosecuted 6/2023: API/APS/IDJ 2021-22), Trí Việt
+    (TVB/TVC 2020-22), and singles KSA/CDO/KVC/MTM/FTM with per-indictment windows.
+    **Tag-not-delete** (anti-look-ahead): shell companies excluded whole-life (`window=None`),
+    real businesses only during their manipulation window (AGM 2024 stays clean — verified);
+    `backtest_report` main results exclude tagged rows but ALWAYS reports the manipulated
+    group separately ("live didn't know" view + does the CV cap self-defend?). List is
+    editable — add a dict entry and reports update.
+35. **Backtest Phase C findings + first validated tunings (15/07).** Report gained per-day
+    REGIME conditioning (same formula as the live gate). Key findings: (a) edge is real but
+    thin in TRAIN (recos +0.51% T3 vs pool +0.22%), ~zero in VALID 2022-23; (b) regime gate
+    validated where it matters — VALID recos: ok +0.10% / caution −0.17% / blocked −0.98%;
+    (c) **LATE outperformed FRESH in BOTH periods** (train-ok +1.08% vs +0.35%; valid-ok +0.15%
+    vs −0.55%) — momentum continuation works on VN; (d) **PRE is the most robust state** (only
+    positive state in validation, 52-54% win everywhere); (e) RSI-overheat & P10-overhead
+    effects flip sign between periods → left untouched (don't tune noise); (f) blacklist
+    earned its keep: 96 manipulated signals leaked in train with +0.98% avg T3 (pump phase) —
+    would have inflated results. **Changes applied (tuned on train, confirmed on valid):**
+    P9 relaxation — `PRE_BREAKOUT_DRYUP_MAX`/`NARROWING_MAX` 0.9 → 1.05 (PRE channel more than
+    doubles: +3,176 train / +1,113 valid extra signals at 51-54% win, +0.66%/+0.37% T3);
+    `STATE_MULT[BREAKOUT_LATE]` 0.60 → 0.85 (kept <1.0: deepest MAE, dies hardest on turns).
+    17/17 tests. HOLDOUT still locked.
+36. **LATE alerts gated by regime (user chose option 3, 15/07).** `_alert_states(regime)`:
+    FRESH+PRE always; **BREAKOUT_LATE only while regime == "ok"** (`ALERT_LATE_IN_OK_REGIME`
+    toggle) — matches the backtest exactly (LATE shines only in favourable regimes, worst
+    tail on turns). LATE alert lines carry an explicit warning (momentum-continuation, highest
+    T+2.5 lock-in risk, small size + tight stop). Consistency: `_record_signals` and the
+    daily_observations `is_reco` flag use the same regime-dependent set, so tracking/learning
+    stay aligned with what is actually alerted. Verified: states per regime correct, LATE
+    alert renders with warning, 17/17 tests.
+37. **Live weight-learner DISABLED (19/07) — regime-bias incident.** The EOD auto-tuner had
+    drifted W_BUY signal 0.40→0.30 (hit the −0.10 cap) from 367 live observations ALL inside
+    the 9-15/07 correction (win 27.5%) with component↔win correlations of ±0.02 — pure noise,
+    single-regime sample. `USE_LEARNED_WEIGHTS=False`, learned file kept as
+    `data/learned_weights.json.disabled-20260719`; effective W_BUY back to RevD defaults
+    (0.35/0.25/0.40), verified. Re-enable only after retraining on the 10y backtest store
+    (train/validation protocol) — awaiting user's detailed requirements for that work.
+38. **Full calibration campaign (W1-W5, 19/07) — RESULT: KEEP EVERYTHING.** Infrastructure:
+    backtest store re-generated with 59 raw-metric columns (W1); `analysis/tuner.py` shadow
+    scorer reproduces the engine EXACTLY (parity: 100% state match, |Δbuy| p95 = 0.003 on the
+    full 10y store) + live-rule simulator + pre-committed objective retT5 − 0.3·|MAE5| on
+    simulated top-5 picks. Disciplined search (2 rounds × 11 weight sets × 24 band tables,
+    block-bootstrap noise floor σ=0.107, quantile-edge band refits, trial log
+    `tuning_trials.jsonl`): **all 11 weight sets' best variants landed at +0.003..+0.045 ≪ σ**
+    — the objective surface is FLAT within ±0.15 of current weights (exact values barely
+    matter; the edge lives in the state machine/gates, not weight fine-tuning). All band
+    refits failed too (several data-refit bands were WORSE than the heuristics, e.g.
+    overheat-RSI refit −0.26/−0.54). The single σ-passing change (B_OVERHEAD refit, +0.158
+    train) **FAILED the validation gate** (VALID −1.115 → −1.727) — overfit, rejected;
+    consistent with #35's "overhead flips sign between periods". Per pre-committed protocol:
+    **no parameter adopted; current heuristics now carry empirical legitimacy** (70 variants
+    surveyed, none robustly better). Strategic implication: under the risk-penalized metric
+    the objective is negative in validation for EVERY configuration tried → the binding
+    constraint is WHEN to trade (regime/Market-Health), not micro-weights. Artifacts:
+    `data/backtest/tuned_params.json`, `tuning_trials.jsonl`. HOLDOUT remains sealed.
+39. **Market Health Phase 2 — measurement fix + gating WIRED (19/07).** (1) O'Neil expiry
+    added to `count_distribution_days`: a distribution day is dropped once the index closes
+    ≥5% above that day's close (fixes the phase-1 saturation bug; avg count 10y = 4.0 now;
+    test added). (2) `analysis/mh_phase2.py` computed daily health 2016-2026 (fixed counter +
+    breadth from the close matrix + canary from simulated picks) and tested 3 gating variants
+    × 8 thresholds on the pre-committed objective: best = **GRAD X=55** (health<55 → only
+    BUY≥65; health<40 → halt): TRAIN −0.019→+0.018, **VALIDATION gate PASS −1.115→−1.009**
+    (threshold chosen on train only). Effect size is modest and train gain is below the weight-
+    campaign σ — the accepted evidence is the consistent same-direction improvement on
+    untouched validation. (3) Wired (fully reversible, `MH_GATE_ENABLED`): `_mh_mode`/`_mh_pass`
+    in scheduler — health computed BEFORE the scoring loop; applied consistently to alerts
+    (halt skips the job; selective raises the alert bar to `MH_GATE_STRONG_SCORE`, message
+    carries a ⚕️ note), `_record_signals`, and daily-observation `is_reco`; banner shows the
+    active mode. Daily health history persisted (`market_health_daily.parquet` for the 10y
+    series). 17/17 tests + gate-logic unit checks.
+40. **Auto-learner retired for good + live-learning repurposed (19/07).** The W_BUY learner's
+    premise is empirically dead (#38: 233k-sample campaign found a FLAT objective surface —
+    a drip-fed learner can only learn noise, as the #37 incident showed). Removed the
+    `learn_and_save()` call from `_eod_job`; `learn_weights.py` marked DEPRECATED (kept as
+    record). Live data's legitimate roles now: **(A) Drift Alarm** — compare rolling live
+    win-rate vs backtest expectation bands, alarm → human re-calibration (pending, needs ≥150
+    resolved live signals post-20/07); **(B) calibrate the two band groups the backtest is
+    blind to** — intraday activity & foreign/prop flow: `daily_observations` now records
+    `intraday_ratio`, `foreign_net_pct`, `prop_net_pct` (migration added; accumulation clock
+    started 19/07; needs ~15k rows ≈ 6-12 months). **Self-reminding**: `_milestone_reminders()`
+    in the EOD job checks both thresholds and sends a ONE-TIME Telegram prompt when reached
+    (dedup flags in app_state). Claude memory note also written (project-pending-milestones).
+41. **Obs blackout in blocked regime — fixed (30/07).** Health check found the app healthy
+    through the 21-29/07 crash week (EOD fired 15:30 daily, health stuck at 12/100, zero
+    signals/alerts = correct ⛔ behavior), BUT `daily_observations` recorded NOTHING for 8
+    sessions: the whole scoring loop is skipped when regime=blocked, and obs_rows only exist
+    inside it — i.e., the unbiased-learning/Hướng-B accumulation stopped exactly during the
+    bear phase, the most valuable data for validation. Fix: `score_for_obs = record_obs and
+    weekday<5` lets the EOD scan SCORE the pool even in blocked purely for observation;
+    `results` (ranked/dashboard/alerts) still excluded in blocked (spec behavior unchanged)
+    and obs `is_reco` is now explicitly False in blocked. The 21-29/07 gap itself is not
+    backfilled (would need per-day live fields; all-NONE rows of a broken market, low value).
+    Also confirmed: `scan_snapshots` stopping 20/07 is benign (save skips empty ranked);
+    weekend market_health rows are Friday duplicates (harmless).
+
+42. **VNINDEX refetched every scan — intraday regime lag fixed (30/07).** `ensure_history`
+    only fetches VNINDEX once per day (cached in `_hist`), so the regime gate and market
+    health ran all day on the morning bar — observed 20/07: index dropped −1.8% intraday
+    while regime stayed `caution` on stale data. Fix in `run_full_scan`: after
+    `ensure_history`, refetch VNINDEX via `fetchers.fetch_vnindex()` each scan (1 cheap
+    call / 5 min), overwrite both `vnindex_close` (regime gate) and `vnindex_full`
+    (market health dist-days/breadth context) plus the `_hist` cache; on network error,
+    log and fall back to the cached series. Side benefit: market health now also sees the
+    live forming bar instead of the morning snapshot.
+
+43. **Learned-weights UI panel removed (30/07).** The auto-learner was retired 19/07
+    (EOD call removed, weights file disabled) but `app.py` still showed the "⚖️ Trọng số
+    tự học" section with a stale "chạy tự động mỗi phiên EOD" description and a working
+    "Học lại trọng số ngay" button that would have re-created `learned_weights.json`.
+    Removed: `learned_status` pane, `relearn_button`, `_render_learned_status`,
+    `_on_relearn`. Replaced with a one-line static note in the tracking tab: fixed
+    W_BUY 0.35/0.25/0.40, validated on the 10y backtest, Drift Alarm supersedes learning.
 
 ## Telegram alert setup (user-supplied credentials)
 

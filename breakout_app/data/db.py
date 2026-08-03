@@ -98,6 +98,16 @@ CREATE TABLE IF NOT EXISTS miss_reviews (
     reviewed_ts TEXT,
     PRIMARY KEY (symbol, obs_date)
 );
+-- Market Health (observe-only phase 1): daily fragility score history
+CREATE TABLE IF NOT EXISTS market_health (
+    date        TEXT PRIMARY KEY,
+    health      REAL,
+    dist_days   INTEGER,
+    breadth_pct REAL,
+    canary_pct  REAL,
+    index_ratio REAL,
+    updated_ts  TEXT
+);
 -- Phase 4b: whole Layer-1 pool daily snapshot (unbiased learning + reco-quality eval)
 CREATE TABLE IF NOT EXISTS daily_observations (
     obs_date   TEXT NOT NULL,         -- EOD snapshot date
@@ -115,6 +125,11 @@ CREATE TABLE IF NOT EXISTS daily_observations (
     win_t5     INTEGER,
     n_forward  INTEGER,
     updated_ts TEXT,
+    -- Hướng B (19/07): metric mà BACKTEST MÙ — tích lũy live để calibrate band
+    -- intraday/flow sau ~6-12 tháng (xem DEVELOPMENT #40)
+    intraday_ratio  REAL,
+    foreign_net_pct REAL,
+    prop_net_pct    REAL,
     PRIMARY KEY (obs_date, symbol)
 );
 """
@@ -126,9 +141,11 @@ def init_db():
     with _conn() as c:
         c.executescript(_SCHEMA)
         # Migration: T+5 columns on daily_observations (added 09/07/2026; CREATE IF
-        # NOT EXISTS doesn't alter pre-existing tables).
+        # NOT EXISTS doesn't alter pre-existing tables) + intraday/flow (19/07).
         cols = {r[1] for r in c.execute("PRAGMA table_info(daily_observations)").fetchall()}
-        for col, typ in (("ret_t5", "REAL"), ("win_t5", "INTEGER")):
+        for col, typ in (("ret_t5", "REAL"), ("win_t5", "INTEGER"),
+                         ("intraday_ratio", "REAL"), ("foreign_net_pct", "REAL"),
+                         ("prop_net_pct", "REAL")):
             if col not in cols:
                 c.execute(f"ALTER TABLE daily_observations ADD COLUMN {col} {typ}")
 
@@ -390,6 +407,35 @@ def unreviewed_losses() -> pd.DataFrame:
         return pd.read_sql_query(q, c)
 
 
+# ── Market Health history ────────────────────────────────────────────────────────────
+def save_market_health(date: str, mh: dict):
+    import datetime as _dt
+    with _conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO market_health"
+            "(date,health,dist_days,breadth_pct,canary_pct,index_ratio,updated_ts)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (date, _f(mh.get("health")), _i(mh.get("dist_days")), _f(mh.get("breadth_pct")),
+             _f(mh.get("canary_pct")), _f(mh.get("index_ratio")),
+             _dt.datetime.now().isoformat(timespec="seconds")),
+        )
+
+
+def recent_reco_entries(before_date: str, n_days: int = 2):
+    """(symbol, reco_date) của các tín hiệu KN trong n_days phiên GẦN NHẤT trước
+    ``before_date`` — đầu vào cho leadership canary."""
+    q = ("SELECT DISTINCT reco_date FROM tracked_signals WHERE reco_date < ? "
+         "ORDER BY reco_date DESC LIMIT ?")
+    with _conn() as c:
+        days = [r[0] for r in c.execute(q, (before_date, n_days)).fetchall()]
+        if not days:
+            return []
+        marks = ",".join("?" * len(days))
+        return c.execute(
+            f"SELECT symbol, reco_date FROM tracked_signals WHERE reco_date IN ({marks})",
+            days).fetchall()
+
+
 # ── Missed-winner registry & views ──────────────────────────────────────────────────
 def mark_miss_reviewed(symbol: str, obs_date: str, cause: str):
     """Register that a missed winner has been post-mortemed (analysis/miss_reviews.md)."""
@@ -446,14 +492,16 @@ def record_observations(obs_date: str, rows):
         obs_date, str(r["symbol"]), r.get("state"), _f(r.get("buy_score")),
         _f(r.get("liquidity")), _f(r.get("momentum")), _f(r.get("signal")),
         _f(r.get("close")), 1 if r.get("is_reco") else 0,
+        _f(r.get("intraday_ratio")), _f(r.get("foreign_net_pct")), _f(r.get("prop_net_pct")),
     ) for r in rows]
     if not payload:
         return 0
     with _conn() as c:
         cur = c.executemany(
             "INSERT OR IGNORE INTO daily_observations"
-            "(obs_date,symbol,state,buy_score,liquidity,momentum,signal,close_ref,is_reco)"
-            " VALUES (?,?,?,?,?,?,?,?,?)", payload,
+            "(obs_date,symbol,state,buy_score,liquidity,momentum,signal,close_ref,is_reco,"
+            " intraday_ratio,foreign_net_pct,prop_net_pct)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", payload,
         )
         return cur.rowcount
 

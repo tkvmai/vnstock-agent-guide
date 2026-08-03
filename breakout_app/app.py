@@ -110,10 +110,6 @@ track_table = pn.widgets.Tabulator(pd.DataFrame(columns=TRACK_COLS), disabled=Tr
                                    show_index=False, height=460,
                                    layout="fit_data_stretch", titles=TRACK_TITLES)
 
-# ── Learned-weights panel (auto-tune from T+3) ────────────────────────────────────
-learned_status = pn.pane.Markdown("")
-relearn_button = pn.widgets.Button(name="🔄 Học lại trọng số ngay", button_type="default", width=210)
-
 # ── Missed-winners tab (false negatives: not recommended but won) ──────────────────
 MISS_COLS = ["obs_date", "symbol", "reason", "buy_score", "close_ref", "ret_t3", "review_cause"]
 MISS_TITLES = {"obs_date": "Ngày", "symbol": "Mã", "reason": "Vì sao bị loại",
@@ -238,7 +234,19 @@ def _refresh_view():
     atype, label = REGIME_STYLE.get(s["regime"], ("light", s["regime"]))
     ratio = f" · VNINDEX/MA20 = {s['regime_ratio']:.3f}" if s.get("regime_ratio") else ""
     regime_pane.alert_type = atype
-    regime_pane.object = f"### {label}{ratio}\n{s.get('regime_msg','')}"
+    mh = s.get("market_health")
+    mh_line = ""
+    if mh:
+        mode = mh.get("mode", "normal")
+        mode_txt = {"normal": "✅ bình thường",
+                    "selective": f"⚕️ CHỌN LỌC — chỉ khuyến nghị BUY ≥ {config.MH_GATE_STRONG_SCORE:.0f}",
+                    "halt": "⛔ TẠM NGỪNG khuyến nghị mới"}.get(mode, mode)
+        mh_line = (f"\n\n**Sức khỏe thị trường: {mh['health']}/100 {mh['label']}** — {mode_txt} "
+                   f"<small>(phiên phân phối: {mh['dist_days']} · breadth>MA20: "
+                   f"{mh['breadth_pct'] if mh['breadth_pct'] is not None else '—'}% · "
+                   f"canary lứa KN gần nhất: "
+                   f"{mh['canary_pct'] if mh['canary_pct'] is not None else '—'}%)</small>")
+    regime_pane.object = f"### {label}{ratio}\n{s.get('regime_msg','')}{mh_line}"
 
     last = s["last_scan"].strftime("%H:%M:%S") if s["last_scan"] else "—"
     status_pane.object = (f"Cập nhật: **{last}** · Universe {s['universe_total']} · "
@@ -270,30 +278,6 @@ def _refresh_view():
         l2_table.value = pd.DataFrame(columns=L2_COLS)
 
     _refresh_tracking()
-
-
-def _render_learned_status():
-    """Show the W_BUY currently in effect + whether it was auto-learned."""
-    w = config.get_w_buy()
-    base = config.W_BUY
-    is_learned = any(abs(w[k] - base[k]) > 1e-9 for k in base)
-    line = (f"**Trọng số BUY đang dùng:** Thanh khoản {w['liquidity']:.2f} · "
-            f"Động lượng {w['momentum']:.2f} · Tín hiệu {w['signal']:.2f}")
-    meta = None
-    try:
-        import json
-        with open(config.LEARNED_WEIGHTS_PATH, encoding="utf-8") as f:
-            meta = (json.load(f) or {}).get("meta")
-    except Exception:
-        meta = None
-    if is_learned and meta:
-        line += (f"  \n<small>🤖 tự học từ {meta['n_samples']} quan sát (toàn pool Layer-1) · "
-                 f"win-rate T+3 {meta['win_rate']*100:.0f}% · cập nhật {meta['updated'][:16]} · "
-                 f"tương quan {meta.get('corr')}</small>")
-    else:
-        line += (f"  \n<small>mặc định — chưa đủ mẫu để tự chỉnh (cần ≥ "
-                 f"{config.LEARN_MIN_SAMPLE} tín hiệu đủ T+3)</small>")
-    learned_status.object = line
 
 
 def _miss_reason(r) -> str:
@@ -350,7 +334,6 @@ def _refresh_pool():
 
 def _refresh_tracking():
     """Load tracked signals + outcomes into the validation tab (Phase 3)."""
-    _render_learned_status()
     _refresh_pool()
     try:
         df = db.load_tracking(300)
@@ -473,26 +456,10 @@ def _on_claude(event):
                          f"```markdown\n{bundle}\n```")
 
 
-def _on_relearn(event):
-    """Manually re-run the W_BUY auto-tuner from the current T+3 outcomes."""
-    try:
-        from analysis import learn_weights
-        r = learn_weights.learn_and_save()
-    except Exception as e:
-        learned_status.object = f"⚠️ Lỗi học trọng số: {type(e).__name__}: {e}"
-        return
-    config.reload_learned_weights()
-    _render_learned_status()
-    if r is None:
-        learned_status.object += ("  \n<small>⚠️ Chưa đủ mẫu / chưa có tín hiệu dự báo dương "
-                                  "→ giữ nguyên trọng số.</small>")
-
-
 scan_button.on_click(_do_scan)
 manual_l2_button.on_click(_do_manual_l2)
 l2_table.param.watch(_on_select, "selection")
 claude_button.on_click(_on_claude)
-relearn_button.on_click(_on_relearn)
 min_score.param.watch(lambda e: _refresh_view(), "value")
 show_failed.param.watch(lambda e: setattr(l1_fail_table, "visible", e.new), "value")
 
@@ -548,16 +515,11 @@ tracking_tab = pn.Column(
                      "được đầu tiên theo T+2.5 → dùng làm thước đo Thắng/Thua.*",
                      styles={"font-size": "0.85em", "color": "#666"}),
     track_summary,
-    pn.layout.Divider(),
-    pn.pane.Markdown("#### ⚖️ Trọng số tự học (từ tỷ lệ thắng T+3)"),
-    pn.pane.Markdown("*Hệ thống tự đo lãi/lỗ tại T+3 và điều chỉnh trọng số 3 thành phần BUY "
-                     "(Thanh khoản / Động lượng / Tín hiệu) theo thành phần nào thực sự dự báo "
-                     "thắng — có kiểm soát (giới hạn thay đổi, cần đủ mẫu), lưu ở "
-                     "`data/learned_weights.json`, không sửa `config.py`. Chạy tự động mỗi phiên "
-                     "EOD (15:30).*",
-                     styles={"font-size": "0.8em", "color": "#888"}),
-    learned_status,
-    relearn_button,
+    pn.pane.Markdown(f"<small>⚖️ Trọng số BUY cố định: Thanh khoản {config.W_BUY['liquidity']:.2f} · "
+                     f"Động lượng {config.W_BUY['momentum']:.2f} · Tín hiệu {config.W_BUY['signal']:.2f} "
+                     f"— đã kiểm chứng trên backtest 10 năm (07/2026); cơ chế tự học đã gỡ bỏ, "
+                     f"thay bằng Drift Alarm khi đủ dữ liệu live.</small>",
+                     styles={"color": "#888"}),
     pn.layout.Divider(),
     track_table,
 )
