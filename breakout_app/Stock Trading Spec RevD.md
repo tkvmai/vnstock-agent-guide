@@ -256,6 +256,17 @@ Bằng chứng (kho backtest 10 năm, objective retT5−0.3·|MAE5|, ngưỡng c
 TRAIN −0.019→+0.018 · VALIDATION −1.115→−1.009 (cải thiện cùng chiều trên dữ liệu chưa
 từng dùng chọn ngưỡng). Knob: `MH_GATE_*` trong config — tắt được hoàn toàn.
 
+> 📖 Chi tiết cách tính từng thành phần (bảng điểm, luật hết hạn phiên phân phối, điểm yếu
+> đã ghi nhận): xem `MARKET_HEALTH.md`.
+
+### 2.9 Follow-Through Day — QUAN SÁT (05/08/2026, chưa can thiệp)
+
+Detector FTD kiểu O'Neil (`engine/ftd.py`): sau nhịp chỉnh ≥8%, ngày rally thứ 4-10 tăng
+≥1.5% trên volume cao hơn → 🔔 banner + log + Telegram 1 lần/sự kiện. **Không đụng gate/**
+**alert.** Backtest 10 năm (`analysis/ftd_study.py`): tín hiệu sau FTD tốt hơn baseline ở cả
+train/valid nhưng regime gate tự mở lại chỉ 1-5 phiên sau FTD → giá trị gia tăng nhỏ, mẫu
+mỏng (valid n=3). Quyết định nối/bỏ sau 3-5 sự kiện FTD live.
+
 ---
 
 ## 3. Bảng tần suất cập nhật

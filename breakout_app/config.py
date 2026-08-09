@@ -28,6 +28,14 @@ ALERT_MAX_PER_SECTOR = 2
 # caution/blocked). Set False to restrict alerts to FRESH+PRE again.
 ALERT_LATE_IN_OK_REGIME = True
 
+# Cảnh báo run-up trên alert (05/08/2026, phản hồi user "ORS tăng quá rồi"):
+# backtest 12,611 tín hiệu FRESH/PRE ≥50 theo return 5 phiên TRƯỚC tín hiệu cho thấy
+# kỳ vọng KHÔNG giảm khi mã đã chạy (nhóm 10-15% tốt nhất: win 53%, +0.82% T+3) nên
+# KHÔNG chặn/hạ điểm — nhưng MAE sâu dần đơn điệu (−1.5% → −2.6%; >15%/5 phiên hiếm
+# n=15 và kỳ vọng âm) → chỉ minh bạch hóa rủi ro rung lắc để user tự chọn size.
+ALERT_RUNUP_WARN_5D = 10.0     # ≥10%/5 phiên → cảnh báo MAE sâu, cân nhắc giảm size
+ALERT_RUNUP_STRONG_5D = 15.0   # ≥15%/5 phiên → vùng hiếm kỳ vọng âm, cân nhắc bỏ qua
+
 # ── Market Health gating (Phase 2, backtest-passed 19/07/2026) ─────────────────────
 # GRAD X=55 trên 10 năm: TRAIN obj −0.019→+0.018, VALIDATION −1.115→−1.009 (cổng PASS,
 # ngưỡng chọn trên train, validation chưa từng dùng để chọn). Đèn vàng 3 mức:

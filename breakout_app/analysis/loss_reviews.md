@@ -96,6 +96,13 @@ các ca mới đều xác nhận; `breakout_hỏng_tái_KN` = **2 ca** (BMP×2) 
 
 ## Đợt review 11/07/2026 — cohort 07/07 (9 ca thua / 11 tín hiệu)
 
+> **Đính chính 03/08 (sửa hệ đo cổ tức tiền mặt — FIX-cash-dividend-returns.md):**
+> **MBB 07/07 và 08/07 KHÔNG hề thua** — ret_t3 thật là **+3.59%** và **+1.80%** (cổ tức
+> 1,000đ/cp GDKHQ 09/07 chưa được cộng lại vào lợi suất; VCI không hồi tố tiền mặt vào giá).
+> Hai ca này đã được rà nguyên nhân cho một thất bại không tồn tại; cause trong registry đã
+> sửa thành `đo_sai_cổ_tức`. VCG 09/07 cũng dính: thật −0.22% (gần hoà vốn), không phải
+> −4.56%. Các con số MBB/VCG bên dưới giữ nguyên làm sử liệu — đọc kèm đính chính này.
+
 **Chẩn đoán chung: KHÔNG phải lỗi tín hiệu — là rủi ro thị trường + rủi ro cụm ngành.**
 
 - **Tín hiệu về mặt kỹ thuật là ĐÚNG chuẩn:** cả 5 mã FRESH thua (FTS, SHS, VND, MBS, MBB) đều
@@ -186,8 +193,13 @@ Trả lời câu hỏi "app còn đề xuất muộn không?" bằng cách nhìn
      sắt đô thị Hà Nội); **26/6 là phiên CUỐI CÙNG hưởng quyền cổ tức tiền mặt 6,000đ/cp (60%
      — đợt chi cổ tức tiền mặt lớn nhất lịch sử TTVN ~25,000 tỷ; GDKHQ 29/6)** → cú "+3.52%
      volume gấp đôi" mà screener đọc là breakout thrust thực chất là **dòng tiền săn cổ tức
-     phiên chốt quyền**; 29/6 người săn cổ tức thoát → −3.65% đóng cửa sát low. Screener mù
-     hoàn toàn với sự kiện quyền — không đọc tin/lịch sự kiện.
+     phiên chốt quyền**. Screener mù hoàn toàn với sự kiện quyền — không đọc tin/lịch sự kiện.
+     **Đính chính bằng chứng (03/08, theo FIX-cash-dividend-returns.md §7):** con số
+     "29/6 −3.65%" đo close-to-close **gần như toàn bộ là phép trừ cơ học của cổ tức**
+     (tham chiếu điều chỉnh 150,000; close thực 150,300 — đóng NGAY TẠI tham chiếu). Bằng
+     chứng thật cho việc người săn cổ tức thoát là **hành vi trong phiên 29/6**: mở cửa
+     158,000 (+5.3% trên tham chiếu) rồi bị bán suốt phiên, đóng cửa chỉ cách đáy 0.13%.
+     Kết luận P11 giữ nguyên — chỉ thay số chống đỡ.
 
 | # | Pattern | Nhận định | Trạng thái |
 |---|---|---|---|

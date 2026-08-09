@@ -147,6 +147,40 @@ def fetch_vnindex(days: int = config.FETCH_DAYS) -> pd.DataFrame:
     return fetch_ohlcv("VNINDEX", days=days, scale_prices=False)
 
 
+# ── Cash-dividend calendar ──────────────────────────────────────────────────────
+def _fetch_dividends_one(symbol: str):
+    """DIV events for one symbol → [(symbol, exright_date, value_per_share_VND)].
+
+    Company().events() trả TOÀN BỘ lịch sử; value_per_share theo ĐỒNG (đã kiểm
+    MBB=1000, cùng đơn vị ohlcv_daily) — xem FIX-cash-dividend-returns.md §2."""
+    from vnstock import Company
+    d = Company(symbol=symbol, source="VCI").events()
+    rows = []
+    if d is None or d.empty or "event_code" not in d.columns:
+        return rows
+    for _, r in d[d["event_code"] == "DIV"].iterrows():
+        if pd.isna(r.get("exright_date")) or pd.isna(r.get("value_per_share")):
+            continue
+        rows.append((symbol, pd.to_datetime(r["exright_date"]).strftime("%Y-%m-%d"),
+                     float(r["value_per_share"])))
+    return rows
+
+
+def fetch_cash_dividends(symbols, workers: int = 6) -> list:
+    """Cash-dividend calendars for many symbols concurrently (one call/symbol/day
+    is enough — events() returns full history). Failed symbols are skipped and
+    picked up on the next daily refresh."""
+    out = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_fetch_dividends_one, s): s for s in symbols}
+        for fut in as_completed(futures):
+            try:
+                out.extend(fut.result())
+            except Exception:
+                pass
+    return out
+
+
 # ── Live snapshot (price board) ─────────────────────────────────────────────────
 def _to_float(v):
     try:

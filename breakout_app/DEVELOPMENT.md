@@ -711,6 +711,72 @@ Restarting: Ctrl+C the server, re-run `run.py`, hard-refresh the browser (Ctrl+F
     `_on_relearn`. Replaced with a one-line static note in the tracking tab: fixed
     W_BUY 0.35/0.25/0.40, validated on the 10y backtest, Drift Alarm supersedes learning.
 
+44. **MARKET_HEALTH.md — dedicated reference doc (user request 03/08).** Full Vietnamese
+    write-up of the Market Health layer in one place: formula + weights, per-component
+    scoring tables straight from `engine/market_health.py` (dist w/ O'Neil rally-expiry,
+    breadth, canary, index), worked example, gating table + config knobs, phase-1/2
+    evidence, the three recorded weaknesses (optimistic missing-data defaults, canary lag
+    at euphoric tops, train effect below bootstrap noise), and storage/wiring notes.
+    Spec RevD §2.8 now links to it.
+
+45. **Cash-dividend return mismeasurement — fixed + backfilled (03/08, per
+    FIX-cash-dividend-returns.md).** VCI back-adjusts splits/stock dividends but NOT cash
+    dividends, so every ret_t1..t5/mfe/mae/win_t3 crossing a cash ex-date understated the
+    return by exactly the dividend yield (holder does receive the cash). Distinct from the
+    PET/close_on fix (that was basis mismatch; here both ends share a basis but the dividend
+    value left the price). Implementation: `cash_dividends` table + `upsert_cash_dividends`
+    + `dividends_between` (VN rule: entitled iff exright_date > entry_date, <= exit_date) +
+    `_div_adj` unit guard (yield >30% of entry → refuse adjustment loudly; Quote() returns
+    thousands-VND, events() returns VND — verified MBB 1000đ matches ohlcv_daily units);
+    `forward_closes` now returns [(date, close)]; ret math adjusted in `upsert_outcome` and
+    `update_observation_outcome` (stored close_t* stay raw); `fetchers.fetch_cash_dividends`
+    (events() full history, 6 workers) + `scheduler._refresh_dividends` once/day in EOD job
+    (app_state guard). Backfill: calendar loaded for all 104 signal/obs symbols (298 DIV
+    rows), ALL 92 signals + 820 observations recomputed — 6 signals corrected (MBB 06/07
+    +1.11→+5.22, 07/07 −0.44→+3.59 win 0→1, 08/07 −2.20→+1.80 win 0→1, VCG 09/07
+    −4.56→−0.22; DPM ±0.04 drift traced to provider re-adjustment, not this fix), 38
+    observations (4 win flips). §5 checks 5/5: MBB regression, no clean-row changes,
+    ex-date boundary (buy 08/07 gets 1000đ, buy 09/07 gets 0), max yield 4.34% ≤ cap,
+    negative test returns exact old values. Registry hygiene: MBB 07+08/07 loss_reviews
+    causes rewritten `đo_sai_cổ_tức` (they were WINS investigated as losses), VCG annotated,
+    P11 evidence corrected (29/06 −3.65% is mechanical dividend subtraction; real
+    dividend-hunter exit evidence is intraday: open +5.3% → close 0.13% off low). Backtest
+    store (§6b) deliberately NOT reprocessed — distortion cancels between recos and pool
+    (§2.4), edge measurement unaffected. DB backup: screener.db.bak-20260803. P11 blind
+    spot (ex-date proximity warning) remains a separate pending item (needs 3rd case).
+
+46. **Run-up transparency warning on alerts (user feedback 05/08: "ORS tăng quá rồi").**
+    Evidence check on the 10y store first: 12,611 FRESH/PRE ≥50 signals bucketed by
+    pre-signal 5-session return show expectancy does NOT fall with run-up (10-15% bucket
+    is the BEST: win 53%, +0.82% T+3 — consistent with LATE>FRESH momentum continuation),
+    so no gate/penalty; but MAE5 deepens monotonically (−1.53% at ≤0% → −2.64% at 10-15%;
+    >15% is rare n=15 AND negative). Fix = transparency only: `_runup_note` appended to
+    `_timing_note` — ≥`ALERT_RUNUP_WARN_5D` (10%) warns "kỳ vọng không giảm nhưng MAE
+    ~−2.6% vs −1.6% → giảm size"; ≥`ALERT_RUNUP_STRONG_5D` (15%) warns "vùng hiếm kỳ vọng
+    âm → cân nhắc bỏ qua". Uses `mom_return_5d` already in the score dict. Same session
+    also answered "HCM lên đỉnh rồi": HCM is −1.1% from its 52w high after a year-long
+    triple-tested ceiling 25.5-26.3k — near-high is the system's best cohort (143-signal
+    audit: monotonic in dist-to-high), reco was PRE at 25,450 before the +2.2% intraday
+    move. 17/17 tests; render verified for both thresholds.
+
+47. **FTD (Follow-Through Day) — study + observe-only detector (05/08).** Motivated by the
+    20-31/07 no-reco window review ("nên bắt đáy V?" → no; FTD = disciplined alternative).
+    Study `analysis/ftd_study.py` on the 10y store (pre-declared gate: FTD-window signals'
+    objective ≥ regime-ok baseline on BOTH periods): 6 FTDs 2016-23, all at real turning
+    points (01/06/18, 19/06/20 fail, 03/08/20, 03/02/21, 25/05/22, 25/11/22 — the bear
+    bottom); FTD-window FRESH/PRE signals beat baseline (train obj +0.57 vs −0.07, n=27;
+    valid +2.49 vs −0.74, n=3) BUT median lag FTD→regime-ok is only ~2 sessions (MA20
+    crashes with price so close/MA20 recovers fast) → total added value is a few signals
+    per year on tiny samples → NOT wired into the gate. Shipped observe-only instead:
+    `engine/ftd.py` (pure state machine; the study's one bug — rally counter never exiting
+    correction when regime recovers without FTD, causing 0 detections — is fixed in both),
+    scheduler computes per scan (vnindex refetch bumped to days=300 for the trailing peak),
+    banner line in app.py (ftd_window/rally/correction phases), one-time Telegram per FTD
+    (app_state flag), store key `ftd`. Parity 5/5 vs study on historical cuts. Retro-check:
+    FTD fired 30/07/2026 (rally day 6, +2.35%) — the exact day DCL's suppressed PRE won
+    +10.3%, two sessions before regime ok. Decision gate: revisit after 3-5 live FTDs.
+    17/17 tests.
+
 ## Telegram alert setup (user-supplied credentials)
 
 1. Create a bot with @BotFather → get the **bot token**.

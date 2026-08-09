@@ -165,9 +165,10 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
         # Refetch VNINDEX MỖI SCAN (fix 30/07): regime gate + market health chạy trên
         # index LIVE thay vì cache buổi sáng — hết trễ intraday (đã thấy 20/07: index
         # rơi −1.8% trong phiên mà regime vẫn 'caution' theo số liệu 8h sáng).
-        # 1 call rẻ mỗi 5 phút; lỗi mạng → dùng cache cũ.
+        # 1 call rẻ mỗi 5 phút; lỗi mạng → dùng cache cũ. days=300 để FTD detector
+        # có đỉnh chạy dài hơn (study dùng 250 phiên).
         try:
-            vn_fresh = fetchers.fetch_vnindex()
+            vn_fresh = fetchers.fetch_vnindex(days=300)
             if vn_fresh is not None and not vn_fresh.empty:
                 vnindex_full = vn_fresh
                 vnindex_close = vn_fresh["close"].reset_index(drop=True)
@@ -203,6 +204,29 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
             mh = None
             _log(f"market health: bỏ qua ({type(e).__name__}: {e})")
         mh_mode = _mh_mode(mh)
+
+        # FTD observe-only (05/08): chỉ hiển thị + log + Telegram 1 lần/sự kiện,
+        # KHÔNG đụng gate/alert — chờ 3-5 FTD live rồi mới quyết (analysis/ftd_study.py).
+        ftd_info = None
+        try:
+            from engine import ftd as ftd_mod
+            ftd_info = ftd_mod.ftd_state(vnindex_full)
+            if ftd_info and ftd_info.get("ftd"):
+                f = ftd_info["ftd"]
+                _log(f"FTD 🔔 {f['date']} (ngày rally {f['day_no']}, +{f['gain']}%) — "
+                     f"cửa sổ đang mở (observe-only)")
+                flag = f"ftd_notified_{f['date']}"
+                if not db.get_state(flag):
+                    db.set_state(flag, "1")
+                    notify.send_telegram(
+                        f"🔔 <b>Follow-Through Day</b> (quan sát — không phải khuyến nghị)\n"
+                        f"VN-Index có FTD ngày {f['date']} (ngày rally thứ {f['day_no']}, "
+                        f"+{f['gain']}% trên volume cao hơn) — lịch sử 10 năm: tín hiệu "
+                        f"breakout ngay sau FTD tốt hơn baseline nhưng mẫu mỏng; app vẫn "
+                        f"chờ regime/health mở như thường lệ.")
+        except Exception as e:
+            _log(f"ftd: bỏ qua ({type(e).__name__}: {e})")
+
         l1_rows, results, obs_rows = [], [], []
         for sym in symbols:
             exch = exch_map.get(sym)
@@ -290,6 +314,8 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
         if mh:
             store.update(market_health={**mh, "mode": mh_mode})
             db.save_market_health(today.isoformat(), mh)
+        if ftd_info is not None:
+            store.update(ftd=ftd_info)
             _log(f"market health: {mh['health']}/100 {mh['label']} · mode={mh_mode} "
                  f"(phân phối {mh['dist_days']} · breadth {mh['breadth_pct']}% · "
                  f"canary {mh['canary_pct']}% · index {mh['index_ratio']})")
@@ -326,6 +352,32 @@ def _record_signals(ranked, reco_date: str, regime: str = "ok", mh_mode: str = "
     n = db.record_tracked_signals(reco_date, rows)
     if n:
         _log(f"tracking: +{n} tín hiệu mới ghi nhận ({reco_date})")
+
+
+def _refresh_dividends():
+    """Nạp lịch cổ tức tiền mặt MỘT LẦN/NGÀY (events() trả cả lịch sử nên đủ).
+
+    Cần cho phép đo outcome: VCI không hồi tố cổ tức tiền mặt vào giá, nên ret_t*
+    phải cộng lại cổ tức khi lệnh đi qua ngày GDKHQ (FIX-cash-dividend-returns.md).
+    Universe + mọi mã đang có tín hiệu/quan sát mở (mã có thể đã rời universe)."""
+    today_iso = date.today().isoformat()
+    if db.get_state("dividend_calendar_date") == today_iso:
+        return
+    from datetime import timedelta
+    cutoff = (date.today() - timedelta(days=14)).isoformat()
+    with _hist_lock:
+        symbols = {s for s in _hist.get("ohlcv", {})}
+    symbols |= {s for s, *_ in db.open_tracked_signals(cutoff)}
+    symbols |= {s for s, *_ in db.open_observations(cutoff)}
+    if not symbols:
+        return
+    try:
+        rows = fetchers.fetch_cash_dividends(sorted(symbols))
+        n = db.upsert_cash_dividends(rows)
+        db.set_state("dividend_calendar_date", today_iso)
+        _log(f"dividend calendar: {n} dòng DIV cho {len(symbols)} mã")
+    except Exception as e:
+        _log(f"dividend calendar lỗi ({type(e).__name__}) — thử lại ngày mai")
 
 
 def _update_outcomes():
@@ -512,15 +564,34 @@ def _select_top_diversified(df, top_n: int, max_per_sector: int):
     return df.loc[picked]
 
 
+def _runup_note(r) -> str:
+    """Cảnh báo minh bạch khi mã đã chạy dài 5 phiên trước tín hiệu (05/08).
+
+    Backtest 12,611 tín hiệu: kỳ vọng KHÔNG giảm theo run-up (không chặn/hạ điểm)
+    nhưng MAE sâu dần đơn điệu — user tự cân size theo khẩu vị rung lắc T+2.5."""
+    run5 = r.get("mom_return_5d")
+    if run5 is None or run5 != run5:
+        return ""
+    if run5 >= config.ALERT_RUNUP_STRONG_5D:
+        return (f"\n   ⚠️ <i>Đã chạy +{run5:.1f}%/5 phiên — vùng hiếm, lịch sử kỳ vọng ÂM "
+                f"và rung lắc rất sâu (MAE ~−4.8%): cân nhắc bỏ qua hoặc size tối thiểu</i>")
+    if run5 >= config.ALERT_RUNUP_WARN_5D:
+        return (f"\n   ⚠️ <i>Đã chạy +{run5:.1f}%/5 phiên — kỳ vọng không giảm (backtest) "
+                f"nhưng rung lắc T+2.5 sâu hơn (MAE ~−2.6% vs −1.6% bình thường) "
+                f"→ cân nhắc giảm size</i>")
+    return ""
+
+
 def _timing_note(r) -> str:
     """One-line RevD timing context for the alert (why it's actionable now)."""
     state = r.get("state")
     rsi = r.get("mom_rsi")
     rsi_txt = f" · RSI {rsi:.0f}" if rsi is not None and rsi == rsi else ""
+    runup = _runup_note(r)
     if state == "PRE_BREAKOUT":
         dist = r.get("setup_dist_below_pivot")
         d = f"cách đỉnh {dist:.1f}%" if dist is not None and dist == dist else "sát đỉnh"
-        return f"↳ {d} — coiling, chờ vượt cản{rsi_txt}"
+        return f"↳ {d} — coiling, chờ vượt cản{rsi_txt}{runup}"
     if state in ("BREAKOUT_FRESH", "BREAKOUT_LATE"):
         age = r.get("breakout_age")
         ratio = r.get("bo_breakout_ratio")
@@ -529,8 +600,9 @@ def _timing_note(r) -> str:
         warn = ("\n   ⚠️ <i>Muộn — momentum tiếp diễn: chỉ hợp lệ khi thị trường thuận; "
                 "rủi ro khóa T+2.5 cao nhất, cân nhắc vị thế nhỏ + stop chặt</i>"
                 if state == "BREAKOUT_LATE" else "")
-        return f"↳ {age_txt}{r_txt}{rsi_txt}{warn}"
-    return f"↳ {rsi_txt.lstrip(' ·')}" if rsi_txt else ""
+        return f"↳ {age_txt}{r_txt}{rsi_txt}{runup}{warn}"
+    base = f"↳ {rsi_txt.lstrip(' ·')}" if rsi_txt else ""
+    return f"{base}{runup}" if (base or runup) else ""
 
 
 def _format_alert(df, regime: str) -> str:
@@ -643,6 +715,7 @@ def _eod_job():
     outcomes (recommended + full pool), then auto-tune W_BUY from the full pool."""
     try:
         run_full_scan(record_obs=True)     # snapshot whole Layer-1 pool at EOD
+        _refresh_dividends()               # cash-dividend calendar (once/day)
         _update_outcomes()                 # recommended signals (tracked_signals)
         _update_observation_outcomes()     # whole pool (daily_observations)
         # (Auto-learner W_BUY đã KHAI TỬ 19/07 — tiền đề bị bác bởi chiến dịch

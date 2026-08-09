@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS tracked_signals (
     signal         REAL,
     PRIMARY KEY (symbol, reco_date)
 );
+-- Lịch cổ tức TIỀN MẶT (VCI không hồi tố tiền mặt vào giá — xem FIX-cash-dividend-returns.md).
+-- Dùng để cộng lại giá trị cổ tức vào ret_t* khi lệnh đi qua ngày GDKHQ.
+CREATE TABLE IF NOT EXISTS cash_dividends (
+    symbol          TEXT NOT NULL,
+    exright_date    TEXT NOT NULL,      -- YYYY-MM-DD (ngày GDKHQ)
+    value_per_share REAL NOT NULL,      -- ĐỒNG/cp (cùng đơn vị ohlcv_daily)
+    PRIMARY KEY (symbol, exright_date)
+);
 CREATE TABLE IF NOT EXISTS signal_outcomes (
     symbol     TEXT NOT NULL,
     reco_date  TEXT NOT NULL,
@@ -289,10 +297,54 @@ def open_tracked_signals(cutoff_date: str):
 
 
 def forward_closes(symbol: str, reco_date: str, n: int = 5):
-    """Up to ``n`` daily closes AFTER reco_date (forward sessions), ascending."""
-    q = ("SELECT close FROM ohlcv_daily WHERE symbol=? AND date>? ORDER BY date LIMIT ?")
+    """Up to ``n`` sessions AFTER reco_date, ascending, as ``[(date, close)]``.
+
+    Returns dates too so outcome maths can tell which sessions crossed a cash-
+    dividend ex-date (see FIX-cash-dividend-returns.md)."""
+    q = ("SELECT date, close FROM ohlcv_daily WHERE symbol=? AND date>? "
+         "ORDER BY date LIMIT ?")
     with _conn() as c:
-        return [r[0] for r in c.execute(q, (symbol, reco_date, n)).fetchall()]
+        return c.execute(q, (symbol, reco_date, n)).fetchall()
+
+
+def upsert_cash_dividends(rows) -> int:
+    """Upsert ``[(symbol, exright_date, value_per_share_VND)]`` into the calendar."""
+    if not rows:
+        return 0
+    with _conn() as c:
+        c.executemany(
+            "INSERT INTO cash_dividends(symbol,exright_date,value_per_share) "
+            "VALUES (?,?,?) ON CONFLICT(symbol,exright_date) DO UPDATE SET "
+            "value_per_share=excluded.value_per_share", rows)
+    return len(rows)
+
+
+def dividends_between(symbol: str, after_date: str, upto_date: str) -> float:
+    """Cổ tức tiền mặt/cp nhận được nếu vào lệnh ngày ``after_date``, giữ tới ``upto_date``.
+
+    Luật VN: mua ở phiên CUỐI trước ngày GDKHQ là còn hưởng quyền → điều kiện
+    exright_date > after_date (chặt) và <= upto_date. Kiểm chứng: VHM GDKHQ
+    29/06/2026 (thứ Hai) — 26/06 (thứ Sáu) là phiên cuối còn hưởng quyền."""
+    q = ("SELECT COALESCE(SUM(value_per_share),0) FROM cash_dividends "
+         "WHERE symbol=? AND exright_date>? AND exright_date<=?")
+    with _conn() as c:
+        return float(c.execute(q, (symbol, after_date, upto_date)).fetchone()[0])
+
+
+def _div_adj(symbol: str, entry_date: str, upto_date: str, basis: float) -> float:
+    """Dividend add-back for one forward close, with a unit sanity cap.
+
+    A computed yield > 30% of the entry price almost certainly means a unit
+    mismatch (e.g. thousands-of-VND prices vs VND dividends) — refuse to adjust
+    loudly rather than emit garbage returns."""
+    div = dividends_between(symbol, entry_date, upto_date)
+    if div <= 0:
+        return 0.0
+    if basis and div > 0.30 * basis:
+        print(f"[db] ⚠️ bỏ qua hiệu chỉnh cổ tức {symbol} {entry_date}→{upto_date}: "
+              f"{div:,.0f}đ > 30% giá vào lệnh {basis:,.0f}đ — nghi lệch đơn vị")
+        return 0.0
+    return div
 
 
 def close_on(symbol: str, date: str):
@@ -310,16 +362,22 @@ def close_on(symbol: str, date: str):
 
 
 def upsert_outcome(symbol: str, reco_date: str, closes, reco_close: float):
-    """Compute + store forward returns for one tracked signal."""
+    """Compute + store forward returns for one tracked signal.
+
+    ``closes`` = [(date, close)]. Cash dividends whose ex-date falls inside the
+    holding window are added back to the exit close (VCI prices are NOT back-
+    adjusted for cash dividends — the holder does receive the money). Stored
+    close_t* stay RAW (real traded prices); only ret_* are adjusted."""
     import datetime as _dt
     if not reco_close:
         return
-    rets = [(c / reco_close - 1) * 100 for c in closes]      # % returns
+    rets = [((c + _div_adj(symbol, reco_date, d, reco_close)) / reco_close - 1) * 100
+            for d, c in closes]                              # % returns
     n = len(rets)
     def at(i):
         return rets[i] if n > i else None
     def cat(i):
-        return closes[i] if n > i else None
+        return closes[i][1] if n > i else None
     win_t3 = None if n < 3 else (1 if rets[2] > 0 else 0)
     row = (
         symbol, reco_date,
@@ -515,11 +573,14 @@ def open_observations(cutoff_date: str):
 
 
 def update_observation_outcome(symbol: str, obs_date: str, closes, close_ref: float):
-    """Fill T+3 (headline) and T+5 (swing-window) outcomes for one observation."""
+    """Fill T+3 (headline) and T+5 (swing-window) outcomes for one observation.
+
+    ``closes`` = [(date, close)]; cash-dividend add-back same as upsert_outcome."""
     import datetime as _dt
     if not close_ref:
         return
-    rets = [(c / close_ref - 1) * 100 for c in closes]
+    rets = [((c + _div_adj(symbol, obs_date, d, close_ref)) / close_ref - 1) * 100
+            for d, c in closes]
     n = len(rets)
     ret_t3 = rets[2] if n >= 3 else None
     win_t3 = None if n < 3 else (1 if rets[2] > 0 else 0)

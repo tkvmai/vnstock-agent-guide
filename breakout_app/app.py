@@ -246,7 +246,21 @@ def _refresh_view():
                    f"{mh['breadth_pct'] if mh['breadth_pct'] is not None else '—'}% · "
                    f"canary lứa KN gần nhất: "
                    f"{mh['canary_pct'] if mh['canary_pct'] is not None else '—'}%)</small>")
-    regime_pane.object = f"### {label}{ratio}\n{s.get('regime_msg','')}{mh_line}"
+    ftd = s.get("ftd")
+    ftd_line = ""
+    if ftd:
+        if ftd.get("ftd"):
+            f = ftd["ftd"]
+            ftd_line = (f"\n\n🔔 **FTD {f['date']}** (ngày rally thứ {f['day_no']}, "
+                        f"+{f['gain']}%) — <small>quan sát, không phải khuyến nghị; app vẫn "
+                        f"chờ regime/health mở như thường lệ</small>")
+        elif ftd.get("phase") == "rally":
+            ftd_line = (f"\n\n<small>🕯 Rally attempt ngày {ftd['rally_day']} "
+                        f"(FTD hợp lệ từ ngày 4; index cách đỉnh {ftd.get('dd', '—')}%)</small>")
+        elif ftd.get("phase") == "correction":
+            ftd_line = (f"\n\n<small>🕯 Đang điều chỉnh {ftd.get('dd', '—')}% từ đỉnh — "
+                        f"chờ rally attempt</small>")
+    regime_pane.object = f"### {label}{ratio}\n{s.get('regime_msg','')}{mh_line}{ftd_line}"
 
     last = s["last_scan"].strftime("%H:%M:%S") if s["last_scan"] else "—"
     status_pane.object = (f"Cập nhật: **{last}** · Universe {s['universe_total']} · "
