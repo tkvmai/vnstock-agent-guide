@@ -3,6 +3,8 @@
 #
 # ⚠️ CÁC GÓI SPONSORED KHÔNG CÀI QUA FILE NÀY: vnstock_data (3.2.1) phải cài bằng
 # vnstock-installer với license Golden của bạn — xem DEPLOY.md bước 3.
+# vnstock-installer KHÔNG có trên PyPI công cộng → khai kho riêng của vnstocks.com:
+--extra-index-url https://vnstocks.com/api/simple
 pandas==2.3.3
 numpy==2.4.6
 panel==1.9.3
