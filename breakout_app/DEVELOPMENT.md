@@ -777,6 +777,232 @@ Restarting: Ctrl+C the server, re-run `run.py`, hard-refresh the browser (Ctrl+F
     +10.3%, two sessions before regime ok. Decision gate: revisit after 3-5 live FTDs.
     17/17 tests.
 
+48. **Liquidity floor lowered 20 → 15 tỷ (user decision 20/08).** Evidence: (a) 10y backtest
+    bucket study — 10-20 tỷ signals are NOT worse (VALID obj −0.02 vs −0.63 for 20-50 tỷ;
+    big caps >100 tỷ actually worst); the floor's real job is executability, and 15 tỷ keeps
+    a 500tr order ≤3.5% participation; (b) two live costs of the 20 tỷ floor: CTR entered
+    the pool late (GTGD20 16-19 tỷ through its base → reco 1 session late, +1.6% worse
+    entry) and FRT was absent from the pool for its entire 3-ceiling run 30/07-03/08.
+    Single-constant change in config.py (everything derives from MIN_GTGD20: server-side
+    screener prefilter ×0.7 → 10.5 tỷ, Layer-1 exact check, UI slider default); spec RevD
+    filter #5 updated. ~11 stocks in [15,20) tỷ enter the pool immediately (NAB, PET, HSG,
+    NKG, VHC, TCM, EVF…); more from full-market screener at next warmup. 17/17 tests.
+
+49. **Smart-money screen — parallel observe channel (user request 20/08).** Users asked for
+    a raw screen (big volume + big smart money, no scoring — they decide). FRT case study
+    justified it: foreign bought +119% of base turnover AT the 23/07 bottom, 5 sessions
+    before the 3-ceiling run, while the breakout engine was structurally blind (price 11%
+    below pivot) — and proprietary sold throughout (hence OR between flows, not AND).
+    Implementation: `_fetch_flow_one` now also returns TODAY's net (`foreign_net_1d`/
+    `prop_net_1d` via `_net_today`); `scheduler._smart_money_screen` runs in the EOD job —
+    pool from static_pool, today's close/volume from the new `_last_live` price-board
+    snapshot (ohlcv_daily only gets today's bar at NEXT morning's warmup — subtle trap),
+    prior 20-bar volume MA + 5-session GTGD base from db, conditions volR≥`SM_VOL_RATIO_MIN`
+    (1.5) AND (NN≥2% OR TD≥3% of base), top `SM_TOP_N` by strongest flow; saves to new
+    `smart_money_screen` table (history for later hit-rate eval), sends a Telegram bulletin
+    (both flows always shown; 🚀 marks overlap with breakout recos), dashboard tab "💰 Dòng
+    tiền" (last 10 days). Missing flow (API lag at 15:30) → symbol excluded, never guessed.
+    Spec RevD §2.10. Dry-run verified: volume stage found 10 candidates on 20/08 (VVS 3.1×,
+    VTP 2.5×, SAB 2.1×…); flow fetch returns _1d fields. 17/17 tests.
+
+50. **Smart-money INTRADAY — compute-every-5', send-hourly (user 21/08, mirroring the
+    breakout channel's architecture).** Data answer: foreign flow IS live in the price
+    board (cumulative buy/sell volumes, fetched every 5-min scan anyway — zero extra API);
+    proprietary flow has NO intraday source, EOD bulletin stays the full two-flow version.
+    Split compute/send exactly like Layer-2-vs-alerts: `_sm_live_scan` runs in EVERY scan
+    — volume AND foreign net both normalized "same-elapsed-time" (÷ session time_ratio) vs
+    MA20-volume / 5-session-GTGD base — and publishes {ts, minutes, rows} to
+    `store.smart_money_live` (rows over EITHER threshold, `qualifies` = both); the 💰 tab
+    now has a ⚡ live section (5-min refresh, status line + table) above the 🌙 EOD table.
+    `_sm_hourly_alert` is scheduled at h:05 alongside the hourly breakout alerts (offset
+    5' so the two messages don't collide): sends only `qualifies` rows not yet alerted
+    today (`sent_sm_alerts` dedup), only from minute 60. Per-day base cache
+    `_hist["sm_base"]`. Live mid-session test (minute 57 of 21/08): 25 rows on the live
+    board (PNJ vol 1.47× + NN projected +67.8% — just short of both), 0 qualifiers →
+    hourly correctly silent; tab renders; dedup cleaned after dry-run. 17/17 tests.
+
+51. **Smart-money picks tracked in the validation tab — separate section (user 21/08).**
+    The 🎯 tab now has two sections: "📈 Kênh CHẤM ĐIỂM" (existing breakout tracking,
+    unchanged) and "💰 Kênh DÒNG TIỀN THÔNG MINH" — every EOD screen pick measured with
+    the IDENTICAL yardstick (entry = close of pick day via close_on, dividend-adjusted
+    ret_t1..t5/MFE/MAE/win_t3) so the two channels compare fairly on one scale.
+    Measurement reuses `signal_outcomes` (outcome is a function of (symbol, date), not
+    channel — overlapping rows are idempotent; all breakout-side queries JOIN from
+    tracked_signals so no cross-contamination, verified). New: `db.open_smart_money` /
+    `load_sm_tracking`, `scheduler._update_sm_outcomes` in the EOD job, summary line
+    (n, win T+3, avg T+3/T+5) + table in app.py. Smoke test with a synthetic FRT 14/08
+    row: outcome computed (T+3 +0.07 win), section renders, breakout table clean,
+    test data removed. 17/17 tests.
+
+52. **Smart-money screen BACKTESTED on 7.5y of real flow history (user request 21/08).**
+    Infrastructure: `analysis/fetch_flow_history.py` — VCI foreign_trade/prop_trade paginate
+    at 100 rows/call → ~3.5-month windows walked back to 2019; first run was HARD-KILLED by
+    the 500 req/min Golden limit (6 workers) → throttled to 3 workers + 0.3s/call sleep,
+    resume-per-symbol; 220 symbols × ~1,905 sessions → `data/flow_history/`. Study:
+    `analysis/sm_screen_backtest.py` — pre-registered protocol (live rule verbatim, D0 vs
+    D+1 entries, pool baseline, manip excluded, variants evaluated 2019-23 / confirmed
+    2024-26). RESULTS (192k symbol-days, 12,744 picks): (a) NO stock-picking edge at T+3 —
+    picks ≈ pool in every period (2019-21: +0.69 vs +0.68); (b) real value #1 = BEAR
+    resilience: 2022-23 picks +0.13/T+3, +0.40/T+5 vs pool −0.24/−0.39, best variant NN≥5%
+    (+0.33/+0.72); (c) real value #2 = T+10 horizon tilt: +0.6-1.0pp over pool in 2022-26;
+    (d) foreign 10-20% of base beats >20% (NOT monotonic — huge prints are deal/block noise,
+    not accumulation); (e) FRT-at-bottom pattern (deep below 20d-high + strong foreign) is
+    real but pays ONLY at T+10 with MAE −4.2% — incompatible with T+2.5 swing, it's a
+    position-trade pattern; "vượt đỉnh + smart money" is the balanced bucket (T+10 +1.46,
+    MAE −2.19); (f) the FRT-27/07-inspired override (NN≥20%, vol≥1.0) adds 40% more picks
+    with WORSE averages → rejected, live thresholds unchanged; (g) D+1 entry (the realistic
+    one for an EOD bulletin) loses most of the small T+3 edge. Caveats: prop coverage 56%
+    of rows (sparse pre-2022), survivorship (delisted have no flow API), no cash-dividend
+    add-back (cancels pick-vs-pool). Verdict written into the 💰 tab: attention radar, not
+    a stock picker. Picks saved: data/backtest/sm_screen_picks.parquet.
+
+53. **Foreign-flow confluence line on breakout alerts (user 21/08, direct consequence of
+    #52 finding e: smart money works better as breakout CONFIRMATION than as standalone
+    signal).** In run_full_scan, each scored result gets `foreign_live_pct` — live foreign
+    net from the price board, full-session projected (÷ time_ratio) over the 5-session
+    GTGD base from `_sm_base` (shared with the 💰 channel); computed only when minutes ≥30
+    so the projection is meaningful. `_foreign_note` appends to `_timing_note` when the
+    value clears `SM_FOREIGN_PCT_MIN` (2%): "💰 Khối ngoại xác nhận: mua ròng ≈+X% nền…",
+    with "MẠNH" tag at ≥10% (per #52, the 10-20% bucket is the sweet spot; deliberately
+    NOT tagging >20% as stronger — deal-noise finding). Display-only: no score/gate change.
+    Render verified for 3 scenarios incl. below-threshold suppression. 17/17 tests.
+    Follow-up study (user question "5 phiên trước NN bán thì sao?"): denominator is TOTAL
+    turnover (always positive), prior foreign selling can't corrupt it; and splitting the
+    NN-triggered picks by prior-5-session foreign direction shows turnaround vs
+    continuation makes NO difference (2019-23: +0.41 vs +0.37 T+3; 2024-26: +0.24 vs
+    +0.24) — FRT's dramatic reversal was anecdote, today's burst alone carries the
+    information. No design change needed.
+
+54. **Smart-money thresholds raised 2%/3% → 5%/5% (user challenged "2% dựa vào đâu?",
+    approved 22/08).** The 2%/3% bands were RevC-era expert heuristics never checked
+    against the actual distribution. Empirics (195,543 symbol-days foreign / 108,703
+    prop, 2019-26, 15-tỷ floor): daily net flow tails are far fatter than assumed —
+    foreign ≥+2% occurs on 28.5% of days, prop ≥+3% on 19.9% (median both ≈0; foreign
+    mean −1.07%) → old bands were top-quartile events, not "clear accumulation"; the
+    screen's selectivity had been carried almost entirely by the AND-volume condition.
+    At 5%: foreign 20.4%, prop 15.0% of days; backtest variant NN≥5% beat NN≥2% in
+    2022-23 (+0.33 vs +0.16 T+3, T+10 +1.09 vs +0.62) and tied in 2024-26; prop
+    thresholds rise monotonically in 2019-23 (+0.42/+0.48/+0.51 at 3/5/8%) — picked 5%
+    for both (symmetric "very strong" band; 8% rejected as confirmation-set shopping).
+    Side benefit: the breakout-alert confluence line shares SM_FOREIGN_PCT_MIN, so it
+    now fires on a genuinely strong minority instead of ~28% of days. UI strings now
+    read thresholds from config. 17/17 tests.
+
+55. **"Weekly volume uptrend" recommendation — tested and REJECTED as a filter (22/08).**
+    User forwarded the popular claim "scan W0>W-1>W-2 weekly volume (institutional
+    accumulation), 1-day spikes are traps". Tested both roles on real data: (a) STANDALONE
+    (2019-26, 15-tỷ pool): mild T+5/T+10 tilt only (+0.2-0.7pp over pool, T+3 win rate
+    actually lower, ~18% of days qualify) — real but small, same class as the SM screen's
+    horizon tilt; (b) AS BREAKOUT FILTER — the claim INVERTS: FRESH/PRE signals sitting on
+    a rising-weekly-volume base are WORSE in both periods (2019-21 win 47.8% vs 51.9%, obj
+    −0.17 vs −0.04; 2022-23 win 40.7% vs 47.5%, obj −1.19 vs −0.91). Consistent with VCP
+    dry-up theory: volume swelling for 2-3 weeks INTO the pivot = churn/supply, exactly
+    what PRE's dry_up condition penalizes; (c) the "1-day spike = trap" premise is also
+    contradicted by our RVOL study (#46 era: breakout-day volume ≥2.5× was the BEST
+    bucket). Decision: NOT integrated anywhere; noted so it isn't re-proposed.
+
+56. **Per-session 5-day flow context on every Telegram message (user 22/08; first cut
+    showed the 5-day TOTAL, user clarified they want EACH session).** `fetchers._daily_last5`
+    returns the last 5 sessions' net (oldest→newest, excluding today) from the same flow
+    call already made (`foreign_daily_5` / `prop_daily_5`, zero extra API). Shared
+    `_flow5_line(fr_daily, pr_daily, fp5, pp5)` renders "💵 5 phiên trước (cũ→mới, tỷ):
+    Khối ngoại +12.9 · +16.0 · -3.2 · +33.3 · -0.2 (Σ +7.9%) | Tự doanh …" — per-session
+    values plus the Spec-3.2.4.2 total-% in Σ, both flows always side by side; "—" when one
+    flow is missing, line omitted when both missing. Wired into (a) breakout alerts for EVERY stock (from the score
+    dict's mom_foreign_net_5d/mom_prop_net_5d/mom_*_pct — already computed for Momentum),
+    (b) the hourly 💰 intraday alert (rows now carry 5d values from the morning
+    `_hist["flow"]` cache + `_sm_base` gtgd5), (c) the EOD 💰 bulletin (flow fetch already
+    returned the 5d fields). Patch note: the sed-style patch first wrote a real newline
+    inside `lstrip("
+")` on the CRLF file → SyntaxError; fixed with a lambda-based
+    re.subn (replacement strings process backslash escapes). 17/17 tests; all three
+    renders verified.
+
+57. **MCDX ("Banker/Hot money/Retailer") decoded and tested against REAL flow (user
+    question 22/08).** Formula is pure close-price RSI: Banker = clamp(1.5×(RSI50−50),0,20),
+    HotMoney = clamp(0.7×(RSI40−30),0,20), "Retailer" = a CONSTANT 20 backdrop (never
+    measured); no volume, no foreign/prop data. On 192k symbol-days 2019-26 with actual
+    flows: Spearman Banker↔foreign-5d-net +0.12, ↔prop −0.00; by Banker level the foreign
+    5d net is −3.65% (blank) → +0.57 → +0.97 (10-20) → **−0.68% at full red** (foreigners
+    net SELL into full-red momentum); when foreign accumulation is genuinely strong (NN5 ≥5%,
+    n=33.7k) Banker averages 6.4, is ZERO 33% of the time and full-red only 8% → real
+    accumulation happens mostly while MCDX shows nothing (FRT-at-bottom pattern). What
+    MCDX does carry is plain trend persistence: fwd T+20 +0.42 → +3.38% monotone in Banker
+    (a momentum effect consistent with our LATE>FRESH / run-up findings). Verdict: MCDX is a
+    smoothed momentum oscillator wearing a "smart money" costume — complementary to, not a
+    substitute for, actual flow data (MCDX blank + foreign buying = early; MCDX red + foreign
+    selling = distribution risk). Not integrated.
+
+58. **MCDX Banker added to the 💰 channel + second Telegram trigger (user 22/08: "nhiều
+    users dùng MCDX hiệu quả").** `scheduler._mcdx_banker(closes)` = clamp(1.5×(RSI50−50),
+    0, 20) with Wilder RMA exactly as Pine `ta.rsi` (SMA seed, then (prev·49+x)/50); `_sm_base`
+    now caches ≤120 prior closes per symbol so live scans compute Banker on prior+live close
+    with zero extra API. Shown as "MCDX Banker /20" on all three 💰 tables (live, EOD, tracking
+    — persisted in new `smart_money_screen.banker` column via migration so the channel can
+    later measure Banker's real hit-rate on its own picks). Second trigger, kept SEPARATE from
+    the flow trigger and labelled honestly "(đà giá, không phải dòng tiền)": volume ≥
+    SM_VOL_RATIO_MIN (same-elapsed-time) AND Banker > `SM_MCDX_BANKER_MIN` (0) → own section in
+    the hourly 💰 alert (dedup key `SYM#mcdx`) and in the EOD bulletin (rows_mcdx, also saved).
+    `SM_MCDX_ENABLED` kill-switch. Live dry-run 21/08 16:46: 30 live rows all with Banker, 8
+    flow-qualifiers (all Banker 0 — post-crash RSI50 < 50), 0 MCDX-qualifiers. 17/17 tests.
+    **Parity & data-basis follow-up (same day):** Wilder RSI50 warm-up is slow — HCM Banker
+    read 3.2 / 8.2 / 6.8 with 70 / 90 / 119 bars → `_long_closes` now builds ≥300 bars. Doing
+    so exposed a DATA TRAP: the provider re-adjusts history after corporate actions, so
+    `data/history/*.parquet` (fetched 15/07) and ohlcv_daily rows older than the 100-day daily
+    refresh window sit on the OLD price basis while recent rows are on the new one (HCM: −13.7%
+    on identical July dates) — a naive splice injects a fake step into RSI. Fix: use only the
+    refresh-window db rows (current basis) and prepend history RESCALED by the median db/hist
+    ratio over overlapping dates; verified max daily jump in the spliced series = 7% (ceiling
+    limit, no artificial step). Residual vs TradingView (HCM app 9.5 vs TV 6; FRT 9.5 vs TV 13)
+    is attributable to TV's own adjustment settings and to users running different MCDX
+    variants ("MCDX SmartMoney" with Banker MA vs the [M2J] original) — the app's series is
+    internally consistent, which is what the RSI needs; documented in the tab note.
+
+59. **EOD smart-money bulletin never fired — root cause + redesign (user report 21/08 evening).**
+    Forensics: the 15:30 EOD job DID run (96 obs rows, dividend calendar refreshed — which
+    runs AFTER the screen) but `smart_money_screen` stayed empty and nothing was sent. Cause:
+    the EOD path took today's foreign/prop net from the API (`foreign_net_1d`/`prop_net_1d`),
+    and VCI publishes day-D flow LATE — at 23:00 on 21/08 the latest foreign_trade row was
+    still 20/08 → every candidate had None flow → silently excluded (and `_eod_job` swallowed
+    everything with `except: pass`). Redesign: (a) 15:30 **EOD-live** bulletin — volume +
+    KHỐI NGOẠI for the whole session from the price board (available at close), prop shown
+    as "—" with an explicit "tự doanh công bố sáng mai" note; (b) NEW `_sm_morning_final`
+    scheduled 08:45 + 11:45 (retry) — builds the **full** bulletin for the previous session D
+    (`_smart_money_screen(final_for=D)`: D's volume/close from ohlcv_daily, official NN+TD via
+    `fetch_flow_per_stock(on_date=D)` — fetcher helpers now take a reference date), REPLACES
+    D's rows in db (tracking/outcomes keep date=D semantics), one-shot flag `sm_final_{D}`;
+    returns False and logs when the API still lacks D. Every early-exit now logs its reason;
+    `_eod_job` logs exceptions. Dry-run final for 20/08 (real data, Telegram stubbed): 5 flow +
+    2 MCDX picks (DCM NN +67% base, IDC, MSN 🚀, SAB 🚀, PVS) saved → 💰 tab no longer empty.
+    17/17 tests. **22/08 follow-up:** the 08:45 bulletin for Friday 21/08 did not appear —
+    (a) the running instance (started 16:57 on 21/08) predates this code, and (b) the morning
+    job had a weekend guard although Friday's flow is published Saturday morning → guard
+    removed (D = last session < today; `sm_final_D` flag makes Sunday a no-op). The 21/08 full
+    bulletin was produced and sent manually the same morning.
+
+60. **Deployment kit (user request 27/08: đưa app lên server riêng).** Three files:
+    `requirements.txt` (public deps pinned to the known-good local versions; sponsored
+    vnstock_data 3.2.1 explicitly NOT pip-installable — goes through vnstock-installer +
+    Golden license), `deploy_check.py` (9 automated preflight checks run ON the server:
+    python ≥3.11, packages, sponsored install, license tier from ~/.vnstock/auth_state.json,
+    **server timezone must be UTC+7** — the `schedule` library fires at LOCAL times so a UTC
+    server shifts every job by 7h, data/ files copied (screener.db + telegram_config are not
+    in git), a live VNINDEX API smoke call, port 5006, optional --ping Telegram test), and
+    `DEPLOY.md` (Linux systemd walkthrough + Windows Task Scheduler notes; day-1 acceptance
+    checklist; warning to STOP the old machine's instance — two instances = double Telegram
+    + diverging DBs). deploy_check verified green on the source machine.
+
+61. **Auto-deploy GitHub → server (user request 03/09).** `.github/workflows/
+    deploy-breakout.yml` (push to main touching breakout_app/** → appleboy/ssh-action runs
+    the server-side `breakout_app/deploy.sh`: fetch+reset --hard origin/main, pip install
+    only when requirements.txt changed, import sanity check, systemctl restart + is-active
+    verification with journal dump on failure; concurrency group serialises deploys;
+    workflow_dispatch for manual runs). One-time setup documented in DEPLOY.md §8: server
+    converted to git-clone layout (data/ moved in — everything sensitive/runtime is
+    gitignored so reset --hard never touches it; gitignore extended with flow_history/,
+    *.log, *.pine, sm_screen_picks), read-only Deploy key for private-repo pulls, separate
+    Actions SSH keypair stored as repo secrets (DEPLOY_HOST/USER/SSH_KEY/PORT).
+
 ## Telegram alert setup (user-supplied credentials)
 
 1. Create a bot with @BotFather → get the **bot token**.

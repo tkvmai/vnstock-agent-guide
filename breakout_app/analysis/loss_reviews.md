@@ -212,3 +212,61 @@ Trả lời câu hỏi "app còn đề xuất muộn không?" bằng cách nhìn
    sách giáo khoa. Ứng viên fix: nới 2 điều kiện này (hoặc chuyển thành điểm thay vì gate cứng)
    — NHƯNG chỉ quyết sau khi `daily_observations` tích lũy ~2 tuần để backtest được tỷ lệ
    "coil ồn → vượt thành công" so với "coil chặt → vượt thành công".
+
+---
+
+## Đợt review 13/08/2026 — 26 ca (đuôi tháng 7: 12 · lứa hậu-mở-cửa 03-07/08: 14)
+
+**Lứa 10-17/07 (12 ca, tất cả `thị_trường_đỏ`):** đuôi của sự kiện điều chỉnh — T+3 của cụm
+10/07 dính phiên 13/07 −1.52%, cụm 15-17/07 dính chuỗi 20-22/07 (−2.46/−0.74/−3.58 =
+−6.7%/3 phiên, tệ nhất tháng). Không mã nào có lỗi setup. **Phát hiện hệ thống đáng giá:**
+các KN 15-17/07 được sinh khi regime EOD thực tế đã blocked/caution-sâu nhưng scan trong
+ngày còn đọc dữ liệu VNINDEX cache buổi sáng — chính là **bug regime-lag đã vá 30/07+03/08**
+(refetch index mỗi scan). Lứa kiểu này không thể tái diễn nguyên dạng. PVD 15/07 MAE −10.9%
+(sâu nhất) minh họa đúng rủi ro khóa T+2.5 giữa sập — không có luật nào cứu ngoài regime gate
+phản ứng nhanh hơn (đã có).
+
+**Lứa 03-07/08 (14 ca):**
+- **8 ca `nhiễu_hoà_vốn`** (|T+3| ≤ 1.5%): VTZ×2, SAB 04, DGW, MSB 04 (0.0%), STB, CTR, VNM.
+  Trong đó SAB 03+04/08 và DGW đều có **MFE ≥ 3.1%** — chốt theo luật MFE≥3% vẫn thoát lãi.
+  CTR 07/08 đã ghi sổ nhóm "MH selective làm trễ 1 phiên".
+- **VPI ×3 (`lặp_lại_mã_hỏng`, P8): −3.1 → −2.0 → −5.1 (T+5 tới −8.2), ca P8 nặng nhất lịch
+  sử app.** Đã kiểm chứng luật ứng viên "cấm tái-KN mã có tín hiệu thua <−2% trong 4-8 phiên
+  trước" trên kho backtest 10 năm: TRAIN 691 tín hiệu cờ-bật obj −0.15 vs −0.04 (kém hơn
+  chút), VALID 151 tín hiệu obj −0.84 vs **−0.90 (tốt hơn!)** — đổi dấu giữa hai thời kỳ,
+  chênh lệch trong nhiễu → **LUẬT BỊ BÁC, không sửa công thức** (nhất quán retro-audit P8
+  trước đây: repetition phụ thuộc regime). VPI là nỗi đau cá biệt; P8 giữ trạng thái 👁.
+- **VHM 04/08 (`đuổi_nhịp_hồi_V`): run-up 5 phiên +15.9% trước breakout** (top rebounder từ
+  đáy 27/07) → mua đỉnh nhịp hồi, −4.5% T+3, MAE −6.3%. Rơi đúng **vùng ≥15% "hiếm & kỳ vọng
+  âm"** của cảnh báo run-up (ship 05/08 — MỘT NGÀY sau ca này): ca xác nhận sống đầu tiên
+  cho feature. Nếu tái diễn mã ở vùng ≥15% mà thua, cân nhắc nâng cảnh báo thành hạ ưu tiên
+  xếp hạng (cần thêm mẫu).
+
+**Kết luận đợt:** không sửa công thức. Hai bài học đều đã được vá/ship từ trước khi review
+(regime-lag fix, run-up warning) — đợt này cung cấp bằng chứng sống cho cả hai. Registry
+sạch: unreviewed = 0.
+
+---
+
+## Đợt review 27/08/2026 — 89 ca (10-24/08): sự kiện đỉnh 12/08 + phân tán trong cohort thắng
+
+**Khung thị trường:** index lập đỉnh 12/08 (1,793) → rơi −3.6%/2 phiên (13-14/08) → đi ngang
+→ bùng nổ 21-27/08 (+5.6%, health 94-100). Ba nhóm:
+
+1. **40 ca `thị_trường_đỏ` (cohort 10-14/08):** KN quanh đỉnh, T+3 dính nhịp rơi — pool cùng
+   kỳ âm tương đương (11/08: −1.88%, win 15%). Cohort 11/08 tệ nhất lịch sử gần đây (2/13
+   thắng, TB −2.22%). Ca đáng nhớ: **HCM 11/08 BUY 87.6 — điểm cao nhất mà thua −4.9%** —
+   nhắc lại giới hạn bản chất: điểm đo chất lượng setup, không đoán được index quay đầu.
+2. **34 ca `nhiễu_hoà_vốn`** (|T+3| ≤ 1.5%) rải khắp các cohort dương 17-24/08.
+3. **15 ca `khác` — phân tán bình thường trong cohort THẮNG:** 18-21/08 cohort tổng dương
+   (19/08: 7/8 thắng +2.36%), các ca lỗ là mã trễ nhịp (BVH ×2, CII, GMD ×2, ORS 24/08…).
+   Lưu ý mở to hơn từ chuỗi này: trong pha hồi mạnh hậu-đáy, khuyến nghị vẫn hơi thua pool
+   beta (19/08 pool +3.7%/93%) — nhất quán phát hiện "edge nằm ở uptrend trưởng thành".
+
+**Giả thuyết mới được kiểm và BÁC — "cấm PRE tái-KN nhiều phiên liên tiếp":** LPB bị PRE
+gọi lại 4 phiên liền khi nền trượt (−2.4/−5.4/−7.1/−3.2), MSB 5 lần → nghi "coil chết".
+Kiểm trên kho backtest: PRE-lặp (≥2 phiên liền trước) ở TRAIN lại TỐT HƠN PRE-mới (obj
++0.33 vs +0.13, win 54.7% vs 50.8%, n=720), VALID ngược dấu (n=89 mỏng) → nhiễu, không có
+luật. Cùng số phận với P8 breakout-lặp. 👁 giữ theo dõi nhóm PRE-lặp trong dữ liệu live.
+
+**Không sửa công thức.** Registry sạch: unreviewed = 0.

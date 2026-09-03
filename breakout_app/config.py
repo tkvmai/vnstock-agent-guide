@@ -36,6 +36,33 @@ ALERT_LATE_IN_OK_REGIME = True
 ALERT_RUNUP_WARN_5D = 10.0     # ≥10%/5 phiên → cảnh báo MAE sâu, cân nhắc giảm size
 ALERT_RUNUP_STRONG_5D = 15.0   # ≥15%/5 phiên → vùng hiếm kỳ vọng âm, cân nhắc bỏ qua
 
+# ── Screen "Dòng tiền thông minh" (20/08/2026, theo yêu cầu users) ────────────────
+# Kênh QUAN SÁT song song, không điểm số/không khuyến nghị — user tự quyết.
+# Điều kiện (chuẩn hóa % trên nền GTGD 5 phiên, Spec 3.2.4.2; HOẶC giữa 2 dòng tiền
+# vì NN và tự doanh VN thường ngược chiều — ca FRT: NN gom đáy, TD bán suốt):
+#   volume >= SM_VOL_RATIO_MIN × MA20 volume, VÀ (NN% >= 2 HOẶC TD% >= 3).
+# Chạy ở EOD (flow tự doanh chỉ có sau phiên); gửi Telegram + tab dashboard.
+SM_SCREEN_ENABLED = True
+SM_VOL_RATIO_MIN = 1.5         # volume hôm nay / MA20 volume (20 phiên trước)
+# Nâng 2→5 và 3→5 (user duyệt 22/08): phân phối thực 2019-26 cho thấy band cũ quá
+# lỏng (NN >=2% xảy ra 28.5% số ngày, TD >=3% 19.9% — không chọn lọc); ngưỡng 5%
+# (band "rất mạnh" Spec 3.2.4.2) chọn lọc hơn (20%/15%) và backtest tốt hơn ở
+# 2022-23 (+0.33 vs +0.16 T+3), không mất gì ở 2024-26. Xem DEVELOPMENT #54.
+SM_FOREIGN_PCT_MIN = 5.0       # NN mua ròng hôm nay >= 5% nền GTGD 5 phiên
+SM_PROP_PCT_MIN = 5.0          # tự doanh mua ròng hôm nay >= 5% nền
+SM_TOP_N = 10                  # tối đa số mã trong bản tin
+# Intraday (21/08): khối ngoại CÓ live trong price board (mỗi scan 5 phút, 0 API thêm);
+# tự doanh KHÔNG có intraday → check NN mỗi scan, nhắn 1 lần/mã/ngày; volume dùng
+# phép chiếu theo time_ratio nên chờ đủ phút cho ổn định.
+SM_INTRADAY_ENABLED = True
+SM_INTRADAY_MIN_MINUTES = 60   # chỉ check sau ~10:15 (phép chiếu volume ổn định)
+# MCDX Banker (22/08, theo yêu cầu users dùng MCDX): Banker = clamp(1.5×(RSI50−50), 0, 20)
+# — thuần giá, KHÔNG phải dòng tiền (study #57: ở mức đỏ kịch khối ngoại bán ròng), nhưng
+# là thước đà trung hạn có giá trị dự báo T+20. Hiển thị trên bảng 💰 + trigger thứ hai:
+# volume ≥ SM_VOL_RATIO_MIN VÀ Banker > SM_MCDX_BANKER_MIN → Telegram (dedup riêng/ngày).
+SM_MCDX_ENABLED = True
+SM_MCDX_BANKER_MIN = 0.0       # > 0 = RSI50 vừa vượt 50; nâng 10 nếu muốn ít tin hơn
+
 # ── Market Health gating (Phase 2, backtest-passed 19/07/2026) ─────────────────────
 # GRAD X=55 trên 10 năm: TRAIN obj −0.019→+0.018, VALIDATION −1.115→−1.009 (cổng PASS,
 # ngưỡng chọn trên train, validation chưa từng dùng để chọn). Đèn vàng 3 mức:
@@ -61,7 +88,11 @@ MAX_UNIVERSE = 800
 # ── Layer 1 — Hard Filter thresholds (Spec section 2) ──────────────────────────
 MIN_SESSIONS = 60                     # filter #3: need >= 60 sessions of OHLCV
 MIN_PRICE = 5_000                     # filter #4: price >= 5,000 VND
-MIN_GTGD20 = 20_000_000_000           # filter #5: GTGD20 >= 20B VND
+# Hạ 20→15 tỷ (user quyết 20/08/2026): backtest 10y cho thấy chất lượng tín hiệu nhóm
+# 10-20 tỷ KHÔNG kém (valid obj −0.02 vs −0.63 của 20-50 tỷ); 15 tỷ vẫn ≤3.5%
+# participation cho lệnh 500tr. Hai ca sống: CTR (16-19 tỷ, vào pool trễ → KN trễ
+# +1.6%) và FRT (vắng pool suốt 3 cây trần 30/07-03/08). Xem DEVELOPMENT #48.
+MIN_GTGD20 = 15_000_000_000           # filter #5: GTGD20 >= 15B VND
 MIN_INTRADAY_ACTIVE_PCT = 30.0        # filter #6: GTGD_intraday >= 30% of expected
 CV_CAP = 200.0                        # filter #8: CV < 200%
 ALLOWED_EXCHANGES = ("HSX", "HOSE", "HNX")  # filter #1: HOSE + HNX only

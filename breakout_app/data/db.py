@@ -59,6 +59,27 @@ CREATE TABLE IF NOT EXISTS tracked_signals (
     signal         REAL,
     PRIMARY KEY (symbol, reco_date)
 );
+-- Screen "Dòng tiền thông minh" (20/08/2026): mã volume lớn + NN/tự doanh gom mạnh,
+-- kênh quan sát song song (không khuyến nghị). Lưu lịch sử để đánh giá hit-rate sau.
+CREATE TABLE IF NOT EXISTS smart_money_screen (
+    date         TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    close        REAL,
+    vol_ratio    REAL,
+    foreign_net  REAL,              -- VND, ròng hôm nay
+    foreign_pct  REAL,              -- % trên nền GTGD 5 phiên
+    prop_net     REAL,
+    prop_pct     REAL,
+    is_breakout_reco INTEGER,       -- 1 nếu cùng ngày cũng được kênh breakout KN
+    banker       REAL,              -- MCDX Banker (0..20) tại EOD
+    PRIMARY KEY (date, symbol)
+);
+-- Dedup cho cảnh báo dòng tiền INTRADAY (NN live, check mỗi 5 phút, nhắn 1 lần/mã/ngày)
+CREATE TABLE IF NOT EXISTS sent_sm_alerts (
+    date   TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    PRIMARY KEY (date, symbol)
+);
 -- Lịch cổ tức TIỀN MẶT (VCI không hồi tố tiền mặt vào giá — xem FIX-cash-dividend-returns.md).
 -- Dùng để cộng lại giá trị cổ tức vào ret_t* khi lệnh đi qua ngày GDKHQ.
 CREATE TABLE IF NOT EXISTS cash_dividends (
@@ -156,6 +177,10 @@ def init_db():
                          ("prop_net_pct", "REAL")):
             if col not in cols:
                 c.execute(f"ALTER TABLE daily_observations ADD COLUMN {col} {typ}")
+        # Migration 22/08: MCDX Banker trên bảng screen dòng tiền
+        sm_cols = {r[1] for r in c.execute("PRAGMA table_info(smart_money_screen)").fetchall()}
+        if sm_cols and "banker" not in sm_cols:
+            c.execute("ALTER TABLE smart_money_screen ADD COLUMN banker REAL")
 
 
 @contextmanager
@@ -305,6 +330,63 @@ def forward_closes(symbol: str, reco_date: str, n: int = 5):
          "ORDER BY date LIMIT ?")
     with _conn() as c:
         return c.execute(q, (symbol, reco_date, n)).fetchall()
+
+
+def open_smart_money(cutoff_date: str):
+    """SM-screen picks chưa đủ T+5 (đo hiệu quả kênh dòng tiền — tái dùng
+    signal_outcomes: outcome chỉ phụ thuộc (symbol, date), không phụ thuộc kênh)."""
+    q = ("SELECT s.symbol, s.date, s.close FROM smart_money_screen s "
+         "LEFT JOIN signal_outcomes o ON o.symbol=s.symbol AND o.reco_date=s.date "
+         "WHERE s.date >= ? AND (o.n_forward IS NULL OR o.n_forward < 5)")
+    with _conn() as c:
+        return c.execute(q, (cutoff_date,)).fetchall()
+
+
+def load_sm_tracking(limit: int = 200) -> pd.DataFrame:
+    """SM-screen picks + outcomes, mới nhất trước (section 💰 tab Theo dõi)."""
+    q = ("SELECT s.date, s.symbol, s.close, s.vol_ratio, s.foreign_pct, s.prop_pct, "
+         "       s.is_breakout_reco, s.banker, o.ret_t1, o.ret_t2, o.ret_t3, o.ret_t5, "
+         "       o.mfe, o.mae, o.win_t3, o.n_forward "
+         "FROM smart_money_screen s "
+         "LEFT JOIN signal_outcomes o ON o.symbol=s.symbol AND o.reco_date=s.date "
+         "ORDER BY s.date DESC, s.foreign_pct DESC LIMIT ?")
+    with _conn() as c:
+        return pd.read_sql_query(q, c, params=(limit,))
+
+
+def sm_intraday_sent(date_iso: str) -> set:
+    """Symbols already alerted by the intraday smart-money check today."""
+    with _conn() as c:
+        return {r[0] for r in c.execute(
+            "SELECT symbol FROM sent_sm_alerts WHERE date=?", (date_iso,))}
+
+
+def mark_sm_intraday(date_iso: str, symbols) -> None:
+    with _conn() as c:
+        c.executemany("INSERT OR IGNORE INTO sent_sm_alerts(date,symbol) VALUES (?,?)",
+                      [(date_iso, s) for s in symbols])
+
+
+def save_smart_money_screen(date_iso: str, rows) -> int:
+    """Replace today's smart-money screen rows. ``rows`` = list of dicts."""
+    with _conn() as c:
+        c.execute("DELETE FROM smart_money_screen WHERE date=?", (date_iso,))
+        c.executemany(
+            "INSERT INTO smart_money_screen(date,symbol,close,vol_ratio,foreign_net,"
+            "foreign_pct,prop_net,prop_pct,is_breakout_reco,banker) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [(date_iso, r["symbol"], r["close"], r["vol_ratio"], r["foreign_net"],
+              r["foreign_pct"], r["prop_net"], r["prop_pct"], r["is_breakout_reco"],
+              r.get("banker")) for r in rows])
+    return len(rows)
+
+
+def load_smart_money_screen(limit_days: int = 10) -> pd.DataFrame:
+    """Recent smart-money screen rows, newest date first (dashboard tab)."""
+    q = ("SELECT * FROM smart_money_screen WHERE date IN (SELECT DISTINCT date "
+         "FROM smart_money_screen ORDER BY date DESC LIMIT ?) "
+         "ORDER BY date DESC, foreign_pct DESC")
+    with _conn() as c:
+        return pd.read_sql_query(q, c, params=(limit_days,))
 
 
 def upsert_cash_dividends(rows) -> int:

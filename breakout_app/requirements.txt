@@ -1,0 +1,16 @@
+# Breakout Screener — public dependencies (chốt theo bản đang chạy ổn 27/08/2026,
+# Python 3.14; Python >= 3.11 đều được nhưng nên cùng 3.14 để khớp hoàn toàn).
+#
+# ⚠️ CÁC GÓI SPONSORED KHÔNG CÀI QUA FILE NÀY: vnstock_data (3.2.1) phải cài bằng
+# vnstock-installer với license Golden của bạn — xem DEPLOY.md bước 3.
+pandas==2.3.3
+numpy==2.4.6
+panel==1.9.3
+bokeh==3.9.1
+param==2.4.1
+tornado==6.5.7
+pyarrow==24.0.0
+schedule==1.2.2
+requests==2.34.2
+vnstock==4.0.2
+vnstock-installer==3.1.2

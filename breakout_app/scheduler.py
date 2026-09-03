@@ -36,6 +36,7 @@ _hist = {
     "static_pool": {},      # symbol -> static Layer-1 result (computed once/day)
 }
 _hist_lock = threading.RLock()
+_last_live = {}      # snapshot price-board gần nhất {sym: {close, volume}} (screen dòng tiền EOD)
 
 
 # ── History warm-up (expensive, once per day) ────────────────────────────────────
@@ -192,7 +193,18 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
         _log("fetching price_board…")
         live_map = fetchers.fetch_price_board(symbols)
         _log(f"price_board: {len(live_map)} symbols")
+        # Snapshot live gần nhất cho screen dòng tiền EOD (ohlcv_daily chỉ có nến
+        # hôm nay vào warmup sáng HÔM SAU — không đọc được volume hôm nay từ db).
+        global _last_live
+        _last_live = {s: {"close": v.get("close"), "volume": v.get("volume")}
+                      for s, v in live_map.items()}
         minutes = clock.minutes_elapsed()
+
+        # Kênh quan sát dòng tiền NN live — TÍNH mỗi scan (gửi thuộc job giờ)
+        try:
+            _sm_live_scan(live_map, minutes)
+        except Exception as e:
+            _log(f"sm-live: bỏ qua ({type(e).__name__}: {e})")
 
         today = date.today()
 
@@ -278,6 +290,8 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
                 fl = flow_map.get(sym) or {}
                 res["mom_foreign_net_5d"] = fl.get("foreign_net_5d")
                 res["mom_prop_net_5d"] = fl.get("prop_net_5d")
+                res["flow_fr_daily"] = fl.get("foreign_daily_5")   # từng phiên, cho alert
+                res["flow_pr_daily"] = fl.get("prop_daily_5")
                 # Whole-pool observation (incl. NONE) for unbiased learning / reco-quality eval.
                 # is_reco = "live có alert mã này không" → blocked luôn False.
                 is_reco = (regime != "blocked"
@@ -296,6 +310,23 @@ def run_full_scan(position_size: int = None, force_history: bool = False,
                 # vào ranked — dashboard/alert giữ nguyên hành vi spec.
                 if res.get("state") != "NONE" and (regime != "blocked" or override_regime):
                     results.append(res)
+
+        # Confluence dòng tiền ngoại cho alert breakout (backtest #52: "vượt đỉnh +
+        # smart money" là bucket cân bằng nhất) — NN live từ price board, chiếu cả
+        # phiên trên nền GTGD5; chỉ tính khi phiên đã trôi đủ để phép chiếu có nghĩa.
+        if results and minutes >= 30:
+            try:
+                sm_base = _sm_base(today.isoformat())
+                tr = min(1.0, minutes / 225.0)
+                for res in results:
+                    b = sm_base.get(res["symbol"])
+                    lv = live_map.get(res["symbol"]) or {}
+                    fb, fs, cl = (lv.get("foreign_buy_volume"),
+                                  lv.get("foreign_sell_volume"), lv.get("close"))
+                    if b and cl and fb is not None and fs is not None:
+                        res["foreign_live_pct"] = round((fb - fs) * cl / tr / b[1] * 100, 1)
+            except Exception as e:
+                _log(f"foreign-confluence: bỏ qua ({type(e).__name__}: {e})")
 
         layer1_df = pd.DataFrame(l1_rows)
         passed_count = int(layer1_df["passed"].sum()) if not layer1_df.empty else 0
@@ -354,6 +385,366 @@ def _record_signals(ranked, reco_date: str, regime: str = "ok", mh_mode: str = "
         _log(f"tracking: +{n} tín hiệu mới ghi nhận ({reco_date})")
 
 
+def _mcdx_banker(closes) -> float:
+    """MCDX Banker (Mango2Juice): clamp(1.5 × (RSI50 − 50), 0, 20). RSI theo Wilder
+    RMA như Pine ta.rsi (seed SMA n, rồi (prev·(n−1)+x)/n). Thuần giá — KHÔNG phải
+    dòng tiền (study #57) nhưng là thước đà trung hạn; users quen dùng nên hiển thị."""
+    n = 50
+    c = [float(x) for x in closes if x is not None and x == x]
+    if len(c) < n + 2:
+        return None
+    ups, dns = [], []
+    for i in range(1, len(c)):
+        d = c[i] - c[i - 1]
+        ups.append(max(d, 0.0)); dns.append(max(-d, 0.0))
+    au, ad = sum(ups[:n]) / n, sum(dns[:n]) / n
+    for u, dd in zip(ups[n:], dns[n:]):
+        au = (au * (n - 1) + u) / n
+        ad = (ad * (n - 1) + dd) / n
+    rsi = 100.0 if ad == 0 else 100 - 100 / (1 + au / ad)
+    return round(max(0.0, min(20.0, 1.5 * (rsi - 50))), 2)
+
+
+def _long_closes(con, sym: str, today_iso: str, n: int = 300) -> list:
+    """Close TRƯỚC hôm nay, cũ→mới, ≥ n bars, trên MỘT hệ điều chỉnh giá.
+
+    Bẫy dữ liệu (phát hiện 22/08, HCM −13.7% sau sự kiện quyền giữa 07/2026): provider
+    hồi tố giá khi có chia tách/quyền, nên (a) kho data/history (fetch 15/07) và (b) các
+    dòng ohlcv_daily cũ hơn cửa sổ refresh 100 ngày còn ở HỆ CŨ, trong khi dòng db gần
+    đây là hệ mới → ghép thô tạo bậc nhảy giả, RSI50 sai. Cách làm: chỉ lấy db trong
+    cửa sổ refresh (hệ hiện tại), rồi ghép history đã RESCALE theo hệ số trùng khớp
+    (median db/hist trên các ngày chung). RSI bất biến theo tỷ lệ nên chuỗi ghép sạch.
+    Cần dài vì RSI50 kiểu Wilder warm-up chậm (70 bars lệch TV ~3 điểm Banker)."""
+    from datetime import timedelta
+    win_lo = (date.today() - timedelta(days=config.FETCH_DAYS + 5)).isoformat()
+    rows = con.execute("SELECT date, close FROM ohlcv_daily WHERE symbol=? AND date<? "
+                       "AND date>=? ORDER BY date", (sym, today_iso, win_lo)).fetchall()
+    if not rows:
+        return []
+    db_map = {d: c for d, c in rows}
+    if len(rows) >= n:
+        return [c for _, c in rows[-n:]]
+    try:
+        import os
+        hp = os.path.join(config.DATA_DIR, "history", f"{sym}.parquet")
+        if os.path.exists(hp):
+            h = pd.read_parquet(hp, columns=["time", "close"])
+            h["d"] = pd.to_datetime(h["time"]).dt.strftime("%Y-%m-%d")
+            h = h.sort_values("d")
+            common = h[h["d"].isin(db_map)]
+            factor = 1.0
+            if len(common) >= 5:
+                ratios = [db_map[d] / c for d, c in zip(common["d"], common["close"]) if c]
+                ratios.sort()
+                factor = ratios[len(ratios) // 2]          # median, bền với 1-2 ngày lỗi
+            older = h[h["d"] < rows[0][0]]["close"].tolist()
+            need = n - len(rows)
+            return [float(x) * factor for x in older[-need:]] + [c for _, c in rows]
+    except Exception:
+        pass
+    return [c for _, c in rows]
+
+
+def _sm_base(today_iso: str) -> dict:
+    """Nền lịch sử cho screen dòng tiền {sym: (vol_ma20, gtgd5, closes_prior)} —
+    cache 1 lần/ngày; closes_prior (≤120 phiên, cũ→mới) dùng tính MCDX Banker."""
+    with _hist_lock:
+        cached = _hist.get("sm_base")
+        if cached and cached[0] == today_iso:
+            return cached[1]
+        pool = [s for s, v in (_hist.get("static_pool") or {}).items() if v.get("passed")]
+    import sqlite3
+    con = sqlite3.connect(config.DB_PATH)
+    base = {}
+    for sym in pool:
+        prior = con.execute(
+            "SELECT close, volume FROM ohlcv_daily WHERE symbol=? AND date<? "
+            "ORDER BY date DESC LIMIT 20", (sym, today_iso)).fetchall()
+        if len(prior) < 20:
+            continue
+        vol_ma20 = sum(r[1] for r in prior[:20]) / 20
+        gtgd5 = sum(r[0] * r[1] for r in prior[:5]) / 5
+        if vol_ma20 and gtgd5:
+            base[sym] = (vol_ma20, gtgd5, _long_closes(con, sym, today_iso))
+    con.close()
+    with _hist_lock:
+        _hist["sm_base"] = (today_iso, base)
+    return base
+
+
+def _sm_live_scan(live_map: dict, minutes: float):
+    """TÍNH dòng tiền NN live MỖI SCAN 5' (như Layer-2) → store cho tab 💰.
+
+    Chuẩn hóa "so với cùng khoảng thời gian" (time_ratio): volume lũy kế / (MA20 ×
+    tỷ lệ phiên đã trôi); NN cũng chiếu theo cùng cách. Tự doanh không có intraday.
+    KHÔNG gửi Telegram ở đây — việc gửi thuộc job giờ (_sm_hourly_alert)."""
+    if not (config.SM_SCREEN_ENABLED and config.SM_INTRADAY_ENABLED):
+        return
+    if date.today().weekday() >= 5 or minutes < 15:
+        return
+    today_iso = date.today().isoformat()
+    base = _sm_base(today_iso)
+    if not base:
+        return
+    tr = min(1.0, max(minutes, 1.0) / 225.0)
+    with _hist_lock:
+        flow5 = dict(_hist.get("flow") or {})      # 5 phiên trước (warmup sáng)
+    rows = []
+    for sym, (vol_ma20, gtgd5, closes_prior) in base.items():
+        lv = live_map.get(sym) or {}
+        close, vol = lv.get("close"), lv.get("volume")
+        fb, fs = lv.get("foreign_buy_volume"), lv.get("foreign_sell_volume")
+        if not close or not vol or fb is None or fs is None:
+            continue
+        vol_ratio = vol / tr / vol_ma20            # so với cùng khoảng thời gian
+        fr_net = (fb - fs) * close                 # ≈ ròng lũy kế (giá hiện tại)
+        fr_pct_proj = fr_net / tr / gtgd5 * 100    # chiếu cả phiên, cùng chuẩn
+        banker = _mcdx_banker(closes_prior + [close]) if config.SM_MCDX_ENABLED else None
+        qualifies = (vol_ratio >= config.SM_VOL_RATIO_MIN
+                     and fr_pct_proj >= config.SM_FOREIGN_PCT_MIN)
+        qualifies_mcdx = (config.SM_MCDX_ENABLED and banker is not None
+                          and vol_ratio >= config.SM_VOL_RATIO_MIN
+                          and banker > config.SM_MCDX_BANKER_MIN)
+        if vol_ratio >= config.SM_VOL_RATIO_MIN or fr_pct_proj >= config.SM_FOREIGN_PCT_MIN:
+            f5 = flow5.get(sym) or {}
+            fn5, pn5 = f5.get("foreign_net_5d"), f5.get("prop_net_5d")
+            rows.append({"symbol": sym, "close": close, "vol_ratio": round(vol_ratio, 2),
+                         "foreign_net": fr_net, "foreign_pct_proj": round(fr_pct_proj, 1),
+                         "qualifies": qualifies, "banker": banker,
+                         "qualifies_mcdx": qualifies_mcdx,
+                         "foreign_net_5d": fn5, "prop_net_5d": pn5,
+                         "fr_daily": f5.get("foreign_daily_5"), "pr_daily": f5.get("prop_daily_5"),
+                         "fr5_pct": (fn5 / (gtgd5 * 5) * 100) if fn5 is not None else None,
+                         "pr5_pct": (pn5 / (gtgd5 * 5) * 100) if pn5 is not None else None})
+    rows.sort(key=lambda r: -r["foreign_pct_proj"])
+    store.update(smart_money_live={"ts": clock.now_vn().strftime("%H:%M:%S"),
+                                   "minutes": round(minutes), "rows": rows[:30]})
+
+
+def _sm_hourly_alert():
+    """GỬI Telegram dòng tiền NN theo GIỜ (như kênh breakout): mã đạt CẢ volume lẫn
+    NN (đã chuẩn hóa cùng-khoảng-thời-gian), mỗi mã 1 lần/ngày. Tự doanh: bản EOD."""
+    try:
+        if not (config.SM_SCREEN_ENABLED and config.SM_INTRADAY_ENABLED):
+            return
+        now = clock.now_vn()
+        if now.weekday() >= 5:
+            return
+        s = store.get().get("smart_money_live") or {}
+        rows = s.get("rows") or []
+        if s.get("minutes", 0) < config.SM_INTRADAY_MIN_MINUTES:
+            return
+        today_iso = date.today().isoformat()
+        sent = db.sm_intraday_sent(today_iso)
+        hits = [r for r in rows if r["qualifies"] and r["symbol"] not in sent]
+        hits_mcdx = [r for r in rows if r.get("qualifies_mcdx")
+                     and f"{r['symbol']}#mcdx" not in sent and r["symbol"] not in sent]
+        if not hits and not hits_mcdx:
+            return
+        lines = [f"💰 <b>Dòng tiền trong phiên</b> — {now.strftime('%H:%M %d/%m')} (chưa nhắn hôm nay)",
+                 "<i>Quan sát — KHÔNG phải khuyến nghị. Volume chuẩn hóa theo cùng khoảng "
+                 "thời gian phiên; tự doanh chỉ có ở bản tin EOD 15:30.</i>"]
+        def _bk(r):
+            b = r.get("banker")
+            return f" · MCDX Banker {b:.0f}/20" if b is not None else ""
+        if hits:
+            lines += ["", "<b>Khối ngoại đang gom</b> (volume + khối ngoại ≥ ngưỡng):"]
+            for r in hits[:config.SM_TOP_N]:
+                lines.append(f"• <b>{r['symbol']}</b> — giá {r['close']:,.0f} · "
+                             f"vol {r['vol_ratio']:.1f}× cùng giờ · "
+                             f"Khối ngoại ≈{r['foreign_net']/1e9:+.1f} tỷ "
+                             f"(chiếu {r['foreign_pct_proj']:+.1f}%){_bk(r)}")
+                f5 = _flow5_line(r.get("fr_daily"), r.get("pr_daily"),
+                                 r.get("fr5_pct"), r.get("pr5_pct"), prefix="  ")
+                if f5:
+                    lines.append(f5.lstrip("\n"))
+        only_mcdx = [r for r in hits_mcdx if r not in hits]
+        if only_mcdx:
+            lines += ["", f"📕 <b>MCDX</b> — volume tăng + Banker &gt; {config.SM_MCDX_BANKER_MIN:.0f}:"]
+            for r in only_mcdx[:config.SM_TOP_N]:
+                lines.append(f"• <b>{r['symbol']}</b> — giá {r['close']:,.0f} · "
+                             f"vol {r['vol_ratio']:.1f}× cùng giờ · "
+                             f"MCDX Banker <b>{r['banker']:.0f}/20</b> · "
+                             f"Khối ngoại ≈{r['foreign_net']/1e9:+.1f} tỷ "
+                             f"(chiếu {r['foreign_pct_proj']:+.1f}%)")
+        notify.send_telegram("\n".join(lines))
+        db.mark_sm_intraday(today_iso, [r["symbol"] for r in hits]
+                            + [f"{r['symbol']}#mcdx" for r in only_mcdx])
+        _log(f"sm-hourly: nhắn {len(hits)} mã dòng tiền + {len(only_mcdx)} mã MCDX")
+    except Exception as e:
+        _log(f"sm-hourly ERROR: {type(e).__name__}: {e}")
+
+
+def _smart_money_screen(final_for: str = None) -> bool:
+    """Screen 'Dòng tiền thông minh' — kênh quan sát, KHÔNG khuyến nghị. Hai chế độ:
+
+    • EOD-live (15:30, final_for=None): volume & KHỐI NGOẠI cả phiên lấy từ price board
+      (live, chính xác tới 15:30); TỰ DOANH chưa có (VCI công bố số ngày D muộn — kiểm
+      21/08: 23:00 vẫn chưa có) → ghi '—'. Lưu db (ngày D) + Telegram.
+    • Sáng D+1 (final_for=D, gọi từ _sm_morning_final): bản ĐẦY ĐỦ cho phiên D với khối
+      ngoại + tự doanh chính thức từ API → GHI ĐÈ dòng D trong db, Telegram bản đầy đủ.
+      Trả False nếu API chưa có số ngày D (caller thử lại sau).
+    Phát hiện bug 21/08: bản 15:30 cũ lấy NN/TD từ API `_1d` → None toàn bộ → không lưu,
+    không nhắn, không log. Giờ mỗi nhánh thoát sớm đều log lý do."""
+    if not config.SM_SCREEN_ENABLED:
+        return True
+    import sqlite3
+    today_iso = date.today().isoformat()
+    ref_iso = final_for or today_iso
+    mode = "final" if final_for else "eod"
+    with _hist_lock:
+        pool = [s for s, v in (_hist.get("static_pool") or {}).items() if v.get("passed")]
+    live = dict(_last_live)
+    if not pool:
+        _log(f"smart-money[{mode}]: bỏ qua — chưa có static_pool"); return False
+    if mode == "eod":
+        if date.today().weekday() >= 5:
+            return True
+        if not live:
+            _log("smart-money[eod]: bỏ qua — chưa có snapshot price board"); return False
+    con = sqlite3.connect(config.DB_PATH)
+    cand = {}
+    for sym in pool:
+        if mode == "eod":
+            lv = live.get(sym) or {}
+            close_t, vol_t = lv.get("close"), lv.get("volume")
+            fb, fs = lv.get("foreign_buy_volume"), lv.get("foreign_sell_volume")
+            fr_live = (fb - fs) * close_t if (fb is not None and fs is not None and close_t) else None
+        else:
+            row = con.execute("SELECT close, volume FROM ohlcv_daily WHERE symbol=? AND date=?",
+                              (sym, ref_iso)).fetchone()
+            if not row:
+                continue
+            close_t, vol_t, fr_live = row[0], row[1], None
+        if not close_t or not vol_t:
+            continue
+        prior = con.execute(
+            "SELECT close, volume FROM ohlcv_daily WHERE symbol=? AND date<? "
+            "ORDER BY date DESC LIMIT 20", (sym, ref_iso)).fetchall()
+        if len(prior) < 20:
+            continue
+        vol_ma20 = sum(r[1] for r in prior) / 20
+        gtgd5 = sum(r[0] * r[1] for r in prior[:5]) / 5
+        if not vol_ma20 or not gtgd5:
+            continue
+        vr = vol_t / vol_ma20
+        if vr >= config.SM_VOL_RATIO_MIN:
+            closes_prior = _long_closes(con, sym, ref_iso)
+            cand[sym] = {"close": close_t, "vol_ratio": vr, "gtgd5": gtgd5, "fr_live": fr_live,
+                         "banker": (_mcdx_banker(closes_prior + [close_t])
+                                    if config.SM_MCDX_ENABLED else None)}
+    reco_on = {r[0] for r in con.execute(
+        "SELECT symbol FROM tracked_signals WHERE reco_date=?", (ref_iso,))}
+    con.close()
+    if not cand:
+        _log(f"smart-money[{mode}] {ref_iso}: không mã nào đạt điều kiện volume"); return True
+    ref_date = date.fromisoformat(ref_iso)
+    flow = fetchers.fetch_flow_per_stock(sorted(cand), on_date=(ref_date if mode == "final" else None))
+    if mode == "final" and not any((flow.get(s) or {}).get("foreign_net_1d") is not None for s in cand):
+        _log(f"smart-money[final] {ref_iso}: API chưa công bố NN/TD ngày {ref_iso} — thử lại sau")
+        return False
+    rows, rows_mcdx = [], []
+    for sym, m in cand.items():
+        fl = flow.get(sym) or {}
+        if mode == "eod":
+            fn = m["fr_live"]                       # khối ngoại cả phiên từ bảng giá
+            pn = None                               # tự doanh: sáng mai
+        else:
+            fn, pn = fl.get("foreign_net_1d"), fl.get("prop_net_1d")
+        fp = fn / m["gtgd5"] * 100 if fn is not None else None
+        pp = pn / m["gtgd5"] * 100 if pn is not None else None
+        flow_ok = ((fp is not None and fp >= config.SM_FOREIGN_PCT_MIN)
+                   or (pp is not None and pp >= config.SM_PROP_PCT_MIN))
+        mcdx_ok = (config.SM_MCDX_ENABLED and m.get("banker") is not None
+                   and m["banker"] > config.SM_MCDX_BANKER_MIN)
+        if flow_ok or mcdx_ok:
+            fn5, pn5 = fl.get("foreign_net_5d"), fl.get("prop_net_5d")
+            (rows if flow_ok else rows_mcdx).append(
+                        {"symbol": sym, "close": m["close"], "vol_ratio": m["vol_ratio"],
+                         "foreign_net": fn, "foreign_pct": fp, "prop_net": pn,
+                         "prop_pct": pp, "is_breakout_reco": int(sym in reco_on),
+                         "banker": m.get("banker"),
+                         "foreign_net_5d": fn5, "prop_net_5d": pn5,
+                         "fr_daily": fl.get("foreign_daily_5"), "pr_daily": fl.get("prop_daily_5"),
+                         "fr5_pct": (fn5 / (m["gtgd5"] * 5) * 100) if fn5 is not None else None,
+                         "pr5_pct": (pn5 / (m["gtgd5"] * 5) * 100) if pn5 is not None else None})
+    rows.sort(key=lambda r: -max(r["foreign_pct"] or -999, r["prop_pct"] or -999))
+    rows = rows[:config.SM_TOP_N]
+    rows_mcdx.sort(key=lambda r: -(r["banker"] or 0))
+    rows_mcdx = rows_mcdx[:config.SM_TOP_N]
+    db.save_smart_money_screen(ref_iso, rows + rows_mcdx)
+    _log(f"smart-money[{mode}] {ref_iso}: {len(rows)} mã dòng tiền + {len(rows_mcdx)} mã MCDX "
+         f"(pool volume-ok: {len(cand)})")
+    if mode == "final":
+        db.set_state(f"sm_final_{ref_iso}", "1")
+    if not rows and not rows_mcdx:
+        return True
+    def _b(v):
+        return f"{v/1e9:+.1f} tỷ" if v is not None else "—"
+    def _p(v):
+        return f"{v:+.1f}%" if v is not None else "—"
+    def _bk(r):
+        b = r.get("banker")
+        return f" · MCDX Banker {b:.0f}/20" if b is not None else ""
+    d_lbl = ref_date.strftime("%d/%m")
+    if mode == "eod":
+        lines = [f"💰 <b>Dòng tiền thông minh</b> — EOD {d_lbl}",
+                 "<i>Quan sát — KHÔNG phải khuyến nghị. Volume ≥1.5× TB20 + khối ngoại gom "
+                 "mạnh (số cả phiên từ bảng giá). Tự doanh: VCI công bố sáng mai → bản đầy "
+                 "đủ gửi lúc đó.</i>", ""]
+    else:
+        lines = [f"💰 <b>Dòng tiền thông minh — phiên {d_lbl} (BẢN ĐẦY ĐỦ)</b>",
+                 "<i>Số chính thức khối ngoại + tự doanh vừa công bố. Quan sát — KHÔNG phải "
+                 "khuyến nghị; nhắc: mua theo hôm sau mất phần lớn edge T+3 (backtest).</i>", ""]
+    for i, r in enumerate(rows, 1):
+        tag = " 🚀" if r["is_breakout_reco"] else ""
+        lines.append(f"{i}. <b>{r['symbol']}</b>{tag} — giá {r['close']:,.0f} · "
+                     f"vol {r['vol_ratio']:.1f}×{_bk(r)}")
+        lines.append(f"   Khối ngoại {_b(r['foreign_net'])} ({_p(r['foreign_pct'])}) · "
+                     f"Tự doanh {_b(r['prop_net'])} ({_p(r['prop_pct'])})")
+        f5 = _flow5_line(r.get("fr_daily"), r.get("pr_daily"),
+                         r.get("fr5_pct"), r.get("pr5_pct"))
+        if f5:
+            lines.append(f5.lstrip(chr(10)))
+    if rows_mcdx:
+        lines += ["", f"📕 <b>MCDX</b> — volume tăng + Banker &gt; {config.SM_MCDX_BANKER_MIN:.0f} "
+                      "<i>(dòng tiền dưới ngưỡng):</i>"]
+        for r in rows_mcdx:
+            tag = " 🚀" if r["is_breakout_reco"] else ""
+            lines.append(f"• <b>{r['symbol']}</b>{tag} — giá {r['close']:,.0f} · "
+                         f"vol {r['vol_ratio']:.1f}× · MCDX Banker <b>{r['banker']:.0f}/20</b> · "
+                         f"Khối ngoại {_b(r['foreign_net'])} ({_p(r['foreign_pct'])}) · "
+                         f"Tự doanh {_b(r['prop_net'])} ({_p(r['prop_pct'])})")
+    lines.append("")
+    lines.append("<i>% = ròng / nền GTGD 5 phiên · 🚀 = cùng ngày được kênh breakout KN</i>")
+    notify.send_telegram(chr(10).join(lines))
+    return True
+
+
+def _sm_morning_final():
+    """Sáng D+1 (08:45 & 11:45 thử lại): bản ĐẦY ĐỦ dòng tiền cho phiên gần nhất D
+    (VCI công bố NN/TD ngày D muộn, không kịp 15:30). Chạy 1 lần/D (cờ app_state)."""
+    try:
+        # KHÔNG guard cuối tuần: số phiên thứ Sáu công bố sáng thứ Bảy (phát hiện 22/08);
+        # D = phiên gần nhất < hôm nay, cờ sm_final_D chống lặp nên Chủ nhật tự bỏ qua.
+        if not config.SM_SCREEN_ENABLED:
+            return
+        import sqlite3
+        con = sqlite3.connect(config.DB_PATH)
+        row = con.execute("SELECT MAX(date) FROM ohlcv_daily WHERE date<?",
+                          (date.today().isoformat(),)).fetchone()
+        con.close()
+        if not row or not row[0]:
+            return
+        d = row[0]
+        if db.get_state(f"sm_final_{d}"):
+            return
+        ok = _smart_money_screen(final_for=d)
+        _log(f"sm-morning-final {d}: {'xong' if ok else 'chưa có dữ liệu, sẽ thử lại'}")
+    except Exception as e:
+        _log(f"sm-morning-final ERROR: {type(e).__name__}: {e}")
+
+
 def _refresh_dividends():
     """Nạp lịch cổ tức tiền mặt MỘT LẦN/NGÀY (events() trả cả lịch sử nên đủ).
 
@@ -397,6 +788,26 @@ def _update_outcomes():
         updated += 1
     if updated:
         _log(f"tracking: cập nhật outcome cho {updated} tín hiệu")
+
+
+def _update_sm_outcomes():
+    """Đo T+1..T+5 cho các mã lọt screen Dòng tiền (đánh giá hiệu quả kênh).
+
+    Tái dùng signal_outcomes — outcome là hàm của (symbol, ngày), trùng mã-ngày với
+    kênh breakout thì kết quả y hệt (idempotent). Các JOIN của kênh breakout đều đi
+    từ tracked_signals nên không bị lẫn dòng SM."""
+    from datetime import timedelta
+    cutoff = (date.today() - timedelta(days=14)).isoformat()
+    updated = 0
+    for symbol, d, close_ref in db.open_smart_money(cutoff):
+        closes = db.forward_closes(symbol, d, 5)
+        if not closes:
+            continue
+        entry = db.close_on(symbol, d) or close_ref
+        db.upsert_outcome(symbol, d, closes, entry)
+        updated += 1
+    if updated:
+        _log(f"sm-tracking: cập nhật outcome cho {updated} mã dòng tiền")
 
 
 def _update_observation_outcomes():
@@ -582,12 +993,38 @@ def _runup_note(r) -> str:
     return ""
 
 
+def _flow5_line(fr_daily, pr_daily, fp5=None, pp5=None, prefix="   💵 ") -> str:
+    """Dòng ngữ cảnh dòng tiền 5 PHIÊN TRƯỚC, liệt kê TỪNG PHIÊN cũ→mới (tỷ VND),
+    kèm tổng % trên GTGD 5 phiên. Luôn hiện cả khối ngoại lẫn tự doanh."""
+    def _seq(vals):
+        if not vals:
+            return "—"
+        return " · ".join(f"{v/1e9:+.1f}" for v in vals)
+    def _p(v):
+        return f" (Σ {v:+.1f}%)" if v is not None and v == v else ""
+    if not fr_daily and not pr_daily:
+        return ""
+    return (f"{chr(10)}{prefix}<i>5 phiên trước (cũ→mới, tỷ): Khối ngoại {_seq(fr_daily)}{_p(fp5)}"
+            f" | Tự doanh {_seq(pr_daily)}{_p(pp5)}</i>")
+
+
+def _foreign_note(r) -> str:
+    """Dòng xác nhận dòng tiền ngoại (backtest #52: smart money làm confluence cho
+    breakout tốt hơn làm tín hiệu độc lập). Chỉ hiện khi NN chiếu ≥ ngưỡng screen."""
+    fl = r.get("foreign_live_pct")
+    if fl is None or fl != fl or fl < config.SM_FOREIGN_PCT_MIN:
+        return ""
+    strong = " MẠNH" if fl >= 10 else ""
+    return (f"\n   💰 <i>Khối ngoại xác nhận{strong}: mua ròng ≈{fl:+.1f}% nền GTGD "
+            f"5 phiên (chiếu cả phiên)</i>")
+
+
 def _timing_note(r) -> str:
     """One-line RevD timing context for the alert (why it's actionable now)."""
     state = r.get("state")
     rsi = r.get("mom_rsi")
     rsi_txt = f" · RSI {rsi:.0f}" if rsi is not None and rsi == rsi else ""
-    runup = _runup_note(r)
+    runup = _runup_note(r) + _foreign_note(r)
     if state == "PRE_BREAKOUT":
         dist = r.get("setup_dist_below_pivot")
         d = f"cách đỉnh {dist:.1f}%" if dist is not None and dist == dist else "sát đỉnh"
@@ -622,6 +1059,10 @@ def _format_alert(df, regime: str) -> str:
         note = _timing_note(r)
         if note:
             lines.append(f"   {note}")
+        f5 = _flow5_line(r.get("flow_fr_daily"), r.get("flow_pr_daily"),
+                         r.get("mom_foreign_net_pct"), r.get("mom_prop_net_pct"))
+        if f5:
+            lines.append(f5.lstrip("\n"))
     lines.append("")
     lines.append("<i>🟢 Mua ngay = breakout mới · 🔵 Sắp breakout = vào sớm</i>")
     return "\n".join(lines)
@@ -715,15 +1156,17 @@ def _eod_job():
     outcomes (recommended + full pool), then auto-tune W_BUY from the full pool."""
     try:
         run_full_scan(record_obs=True)     # snapshot whole Layer-1 pool at EOD
+        _smart_money_screen()              # kênh quan sát dòng tiền (Telegram + db)
         _refresh_dividends()               # cash-dividend calendar (once/day)
         _update_outcomes()                 # recommended signals (tracked_signals)
+        _update_sm_outcomes()              # smart-money screen picks (hiệu quả kênh 💰)
         _update_observation_outcomes()     # whole pool (daily_observations)
         # (Auto-learner W_BUY đã KHAI TỬ 19/07 — tiền đề bị bác bởi chiến dịch
         #  calibrate 233k mẫu: mặt objective phẳng quanh trọng số hiện tại, learner
         #  nhỏ giọt chỉ có thể học nhiễu. Xem DEVELOPMENT #37/#38/#40.)
         _milestone_reminders()
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"EOD job ERROR: {type(e).__name__}: {e}")
 
 
 def start_scheduler(initial_scan: bool = True):
@@ -735,11 +1178,16 @@ def start_scheduler(initial_scan: bool = True):
     On startup — one immediate scan so the dashboard is never stale/empty.
     """
     schedule.every().day.at("08:00").do(_morning_warmup)
+    # Bản đầy đủ dòng tiền phiên hôm trước (NN+TD chính thức) — 2 lượt đề phòng API trễ
+    schedule.every().day.at("08:45").do(_sm_morning_final)
+    schedule.every().day.at("11:45").do(_sm_morning_final)
     schedule.every(5).minutes.do(_intraday_job)
     schedule.every().day.at("15:30").do(_eod_job)
     # Hourly Telegram alert of top new Layer-2 stocks, ALERT_START_HOUR..END_HOUR.
     for h in range(config.ALERT_START_HOUR, config.ALERT_END_HOUR + 1):
         schedule.every().day.at(f"{h:02d}:00").do(_alert_job)
+        # Dòng tiền NN theo giờ (lệch 5' sau breakout để 2 tin không dính nhau)
+        schedule.every().day.at(f"{h:02d}:05").do(_sm_hourly_alert)
 
     def _loop():
         if initial_scan:

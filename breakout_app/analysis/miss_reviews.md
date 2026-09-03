@@ -77,3 +77,33 @@ nhánh đối chứng đều âm trừ đúng đáy V — thứ hệ không thi�
 bắt). Registry: 30 ca `loại_hợp_lệ` + DCL `khác` + 2 ca sót đợt cũ (HAH 9/7, VCG 13/7) — đã
 đóng toàn bộ, unreviewed = 0. Dữ liệu replay: scratchpad `replay_norec.parquet` (tái tạo được
 bằng script trong hồ sơ phiên làm việc 05/08).
+
+---
+
+## Đợt review 13/08/2026 — 125 ca (quan sát 30/07-07/08, sóng hồi rộng)
+
+**119 ca `loại_hợp_lệ` — beta sóng hồi, không phải lỗi chọn mã:** toàn bộ là state NONE
+(BUY 0) — GAS, GVR, BCM, PLX, PVT, GEX, FRT, DGC, BSR… còn sâu dưới pivot, đang leo lại từ
+đáy 27/07. Trong cửa sổ này 58-70% pool cùng đạt ≥3% T+3 — khi 2/3 thị trường "thắng" thì
+ngưỡng bỏ sót 3% mất ý nghĩa chọn lọc; đây là câu chuyện của cả pool, nhất quán với 2 đợt
+review trước. Không hành động. (Cân nhắc tương lai: ngưỡng bỏ sót ĐỘNG — vd ret_t3 ≥ 3% VÀ
+vượt median pool cùng phiên +X% — để tab bỏ sót không ngập trong beta ở các pha hồi rộng.)
+
+**4 ca đặc biệt — và 3 trong đó chụm về đúng MỘT chỗ:**
+
+| Ca | Engine thấy gì | Bị chặn bởi | Kết quả |
+|---|---|---|---|
+| DCL 31/07 | PRE **BUY 71.7** | MH **halt** (health 25) | **+14.4%** |
+| NVL 03/08 | FRESH BUY 51.7 | MH **selective** (health 46, cần ≥65) | +4.2% |
+| CTR 06/08 (đợt trước) | FRESH BUY 58.0 | MH **selective** (health 40) | trễ 1 phiên, +1.6% |
+| HCM 07/08 | PRE 63.2 (EOD) | *không phải bỏ sót* — đã alert 10:14 intraday; obs EOD ghi selective | artifact sổ sách |
+
+**Nhóm "MH chặn/trễ sau đáy" giờ = 4 ca** (DCL 30/07 +10.3 · DCL 31/07 +14.4 · NVL 03/08
++4.2 · CTR 06/08 trễ) so với 2 ca gate chặn đúng (MCH 30/07 −3.4 · MST 30/07 −1.9) — vượt
+ngưỡng ≥3 ca của luật parsimony → **đủ điều kiện mở nghiên cứu calibrate MH hậu-đáy** (chờ
+lệnh user). Ứng viên đã có sẵn mốc khách quan: **cửa sổ FTD** (FTD 30/07 bắn đúng lúc) —
+biến thể "trong cửa sổ FTD: halt→selective" sẽ vớt DCL 31/07 (71.7≥65) và chặn vẫn đúng
+MCH/DCL-30 (<65); kiểm chứng được trên `analysis/mh_phase2.py` + `ftd_study.py` trước khi
+đụng config. Lưu ý HCM 07/08 còn lộ một nuance nhỏ: `is_reco` trong obs ghi theo health
+EOD trong khi alert chạy theo health intraday — chấp nhận được (ghi nhận bảo thủ), nhưng
+khi đọc thống kê obs cần nhớ nhóm is_reco=1 hơi thiếu so với alert thực.

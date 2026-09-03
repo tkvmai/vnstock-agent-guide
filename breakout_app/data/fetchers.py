@@ -221,39 +221,78 @@ def fetch_price_board(symbols, chunk: int = 50) -> dict:
 
 
 # ── Money flow (per-stock, exact 5-session net per Spec 3.2.4.2) ──────────────────
-def _net_5d_excl_today(df: pd.DataFrame, date_col: str, value_col: str) -> float:
-    """Sum the net value over the 5 most recent sessions, excluding today."""
+def _net_5d_excl_today(df: pd.DataFrame, date_col: str, value_col: str, cutoff=None) -> float:
+    """Sum the net value over the 5 most recent sessions BEFORE ``cutoff`` (default today)."""
     if df is None or df.empty or value_col not in df.columns:
         return None
     d = df.copy()
     d[date_col] = pd.to_datetime(d[date_col]).dt.date
-    today = date.today()
-    d = d[d[date_col] < today].sort_values(date_col).tail(config.LOOKBACK_FLOW)
+    cutoff = cutoff or date.today()
+    d = d[d[date_col] < cutoff].sort_values(date_col).tail(config.LOOKBACK_FLOW)
     if d.empty:
         return None
     return float(pd.to_numeric(d[value_col], errors="coerce").fillna(0).sum())
 
 
-def _fetch_flow_one(symbol: str, days: int = 20) -> dict:
-    """Exact 5-session net foreign + proprietary value for one symbol (VND)."""
+def _daily_last5(df: pd.DataFrame, date_col: str, value_col: str, cutoff=None):
+    """Ròng TỪNG PHIÊN của 5 phiên gần nhất TRƯỚC ``cutoff`` (mặc định hôm nay), cũ → mới."""
+    if df is None or df.empty or value_col not in df.columns:
+        return None
+    d = df.copy()
+    d[date_col] = pd.to_datetime(d[date_col]).dt.date
+    cutoff = cutoff or date.today()
+    d = d[d[date_col] < cutoff].sort_values(date_col).tail(config.LOOKBACK_FLOW)
+    if d.empty:
+        return None
+    return [float(x) for x in pd.to_numeric(d[value_col], errors="coerce").fillna(0)]
+
+
+def _net_today(df: pd.DataFrame, date_col: str, value_col: str, on=None):
+    """Net value of ONE session (``on``, default today); None if that row is absent.
+    VCI công bố số ngày D muộn (23:00 ngày D vẫn chưa có — kiểm 21/08) → bản 'đầy đủ'
+    cho phiên D chỉ lấy được vào sáng D+1."""
+    if df is None or df.empty or value_col not in df.columns:
+        return None
+    d = df.copy()
+    d[date_col] = pd.to_datetime(d[date_col]).dt.date
+    row = d[d[date_col] == (on or date.today())]
+    if row.empty:
+        return None
+    v = pd.to_numeric(row[value_col], errors="coerce").iloc[-1]
+    return None if v != v else float(v)
+
+
+def _fetch_flow_one(symbol: str, days: int = 20, on_date=None) -> dict:
+    """Foreign + proprietary net value for one symbol (VND): 5-session before the
+    reference day (Spec 3.2.4.2 — scoring/context) AND the reference day itself
+    (smart-money screen). ``on_date`` (datetime.date) = reference day; default today."""
     from vnstock_data import Trading
+    ref = on_date or date.today()
     end = date.today().isoformat()
-    start = (date.today() - timedelta(days=days)).isoformat()
+    start = (ref - timedelta(days=days)).isoformat()
     out = {}
     try:
         f = Trading(symbol=symbol, source="VCI").foreign_trade(start=start, end=end)
-        out["foreign_net_5d"] = _net_5d_excl_today(f, "trading_date", "fr_net_value_total")
+        out["foreign_net_5d"] = _net_5d_excl_today(f, "trading_date", "fr_net_value_total", ref)
+        out["foreign_net_1d"] = _net_today(f, "trading_date", "fr_net_value_total", ref)
+        out["foreign_daily_5"] = _daily_last5(f, "trading_date", "fr_net_value_total", ref)
     except Exception:
         out["foreign_net_5d"] = None
+        out["foreign_net_1d"] = None
+        out["foreign_daily_5"] = None
     try:
         p = Trading(symbol=symbol, source="VCI").prop_trade(start=start, end=end)
-        out["prop_net_5d"] = _net_5d_excl_today(p, "trading_date", "total_trade_net_value")
+        out["prop_net_5d"] = _net_5d_excl_today(p, "trading_date", "total_trade_net_value", ref)
+        out["prop_net_1d"] = _net_today(p, "trading_date", "total_trade_net_value", ref)
+        out["prop_daily_5"] = _daily_last5(p, "trading_date", "total_trade_net_value", ref)
     except Exception:
         out["prop_net_5d"] = None
+        out["prop_net_1d"] = None
+        out["prop_daily_5"] = None
     return out
 
 
-def fetch_flow_per_stock(symbols, workers: int = 5) -> dict:
+def fetch_flow_per_stock(symbols, workers: int = 5, on_date=None) -> dict:
     """Exact 5-session foreign/proprietary net per stock (Spec 3.2.4.2).
 
     Returns {symbol: {foreign_net_5d, prop_net_5d}} in full VND. This is EOD data
@@ -261,7 +300,7 @@ def fetch_flow_per_stock(symbols, workers: int = 5) -> dict:
     """
     out = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_fetch_flow_one, s): s for s in symbols}
+        futures = {pool.submit(_fetch_flow_one, s, 20, on_date): s for s in symbols}
         for fut in as_completed(futures):
             sym = futures[fut]
             try:

@@ -38,7 +38,7 @@ Loại các mã không đủ điều kiện trước khi tính điểm. Các b�
 | 2 | Trạng thái giao dịch | không cảnh báo/kiểm soát/tạm ngừng | tĩnh |
 | 3 | Lịch sử | ≥ 60 phiên | tĩnh |
 | 4 | Giá tối thiểu | ≥ 5,000 VND | tĩnh |
-| 5 | GTGD20 | ≥ 20 tỷ VND | tĩnh |
+| 5 | GTGD20 | ≥ 15 tỷ VND (hạ từ 20 tỷ 20/08/2026 — backtest: nhóm 10-20 tỷ không kém chất lượng; phù hợp lệnh ≤500tr) | tĩnh |
 | 6 | Hoạt động intraday | GTGD hôm nay ≥ 30% kỳ vọng (điều chỉnh theo thời gian) | **động (5 phút)** |
 | 7 | Giá trần/sàn | không ở giá trần hoặc sàn | **động (5 phút)** |
 | 8 | Chặn CV | CV(GTGD, 20 phiên) < 200% | tĩnh |
@@ -258,6 +258,36 @@ từng dùng chọn ngưỡng). Knob: `MH_GATE_*` trong config — tắt đượ
 
 > 📖 Chi tiết cách tính từng thành phần (bảng điểm, luật hết hạn phiên phân phối, điểm yếu
 > đã ghi nhận): xem `MARKET_HEALTH.md`.
+
+### 2.10 Screen "Dòng tiền thông minh" — KÊNH QUAN SÁT SONG SONG (20/08/2026)
+
+Theo yêu cầu users ("chỉ cần screen thô, tự quyết"): mỗi phiên EOD liệt kê mã
+**volume ≥1.5× TB20** VÀ (**khối ngoại mua ròng hôm nay ≥5%** HOẶC **tự doanh ≥5%**
+nền GTGD 5 phiên — HOẶC vì hai dòng tiền VN thường ngược chiều; ca FRT: khối ngoại
+gom +119% nền ngay đáy 23/07 trong khi tự doanh bán). *Ngưỡng nâng 2%/3% → 5%/5%
+ngày 22/08 theo phân phối thực 2019-26: band cũ xảy ra 28.5%/19.9% số ngày (không
+chọn lọc); 5% = band "rất mạnh" 3.2.4.2, backtest 2022-23 tốt hơn, 2024-26 trung
+tính.* Không điểm số, không khuyến nghị, không đụng kênh
+breakout; 🚀 đánh dấu mã trùng khuyến nghị. Telegram EOD + tab 💰 + bảng
+`smart_money_screen` (lưu lịch sử để đánh giá hit-rate khi đủ mẫu). Knob `SM_*`.
+
+**Intraday (21/08) — kiến trúc như kênh breakout:** khối ngoại có mua/bán lũy kế
+LIVE trong price board (mỗi scan 5 phút, 0 API thêm). **Tính mỗi 5 phút** (như
+Layer-2): volume và NN đều chuẩn hóa "so với cùng khoảng thời gian" (chia
+time_ratio phiên đã trôi) → bảng ⚡ trên tab 💰 (mã vượt 1 trong 2 ngưỡng, ✅ =
+đạt cả hai). **Gửi Telegram theo GIỜ** (h:05, lệch 5' sau tin breakout): chỉ mã ✅
+chưa nhắn hôm nay (`sent_sm_alerts`), từ phút 60 trở đi. Tự doanh KHÔNG có
+intraday — chỉ xuất hiện trong bản tin EOD 15:30 (bản đầy đủ hai dòng tiền).
+
+**MCDX Banker (22/08):** cột "MCDX Banker /20" (= clamp(1.5×(RSI50−50), 0, 20), thuần giá —
+study #57: KHÔNG phải dòng tiền, ở mức đỏ kịch khối ngoại bán ròng) trên mọi bảng 💰, và
+trigger thứ hai **volume ≥1.5× VÀ Banker > 0** → mục 📕 MCDX riêng trong tin giờ + bản tin
+EOD. Knob `SM_MCDX_ENABLED`, `SM_MCDX_BANKER_MIN`.
+
+**Lịch phát hành (sửa 21/08):** VCI công bố khối ngoại/tự doanh ngày D **muộn** (23:00 ngày D
+chưa có) → 15:30 gửi bản **EOD-live** (volume + khối ngoại cả phiên từ bảng giá; tự doanh "—");
+**sáng D+1 lúc 08:45** (thử lại 11:45) gửi bản **ĐẦY ĐỦ** phiên D với NN + TD chính thức và
+ghi đè dòng D trong bảng lịch sử. Mọi nhánh thoát sớm đều ghi log.
 
 ### 2.9 Follow-Through Day — QUAN SÁT (05/08/2026, chưa can thiệp)
 

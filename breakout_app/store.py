@@ -15,6 +15,7 @@ _state = {
     "regime_msg": "",
     "market_health": None,          # observe-only fragility score (engine/market_health)
     "ftd": None,                    # observe-only Follow-Through Day state (engine/ftd)
+    "smart_money_live": None,       # NN live mỗi scan {ts, minutes, rows} (tab 💰)
     "last_scan": None,              # datetime of last completed scan
     "status": "idle",              # idle | scanning | error
     "error": None,

@@ -9,3 +9,7 @@ data/learned_weights.json
 data/history/
 __pycache__/
 *.pyc
+data/flow_history/
+data/backtest/sm_screen_picks.parquet
+data/*.log
+data/*.pine

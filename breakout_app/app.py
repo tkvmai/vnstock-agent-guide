@@ -261,6 +261,7 @@ def _refresh_view():
             ftd_line = (f"\n\n<small>🕯 Đang điều chỉnh {ftd.get('dd', '—')}% từ đỉnh — "
                         f"chờ rally attempt</small>")
     regime_pane.object = f"### {label}{ratio}\n{s.get('regime_msg','')}{mh_line}{ftd_line}"
+    _refresh_sm_live(s)
 
     last = s["last_scan"].strftime("%H:%M:%S") if s["last_scan"] else "—"
     status_pane.object = (f"Cập nhật: **{last}** · Universe {s['universe_total']} · "
@@ -349,6 +350,8 @@ def _refresh_pool():
 def _refresh_tracking():
     """Load tracked signals + outcomes into the validation tab (Phase 3)."""
     _refresh_pool()
+    _refresh_smart_money()
+    _refresh_sm_tracking()
     try:
         df = db.load_tracking(300)
     except Exception:
@@ -522,8 +525,56 @@ layer2_tab = pn.Column(
     claude_out,
 )
 
+SM_TRACK_COLS = ["date", "symbol", "close", "vol_ratio", "banker", "foreign_pct", "prop_pct",
+                 "breakout", "ret_t1", "ret_t2", "ret_t3", "ret_t5", "mfe", "mae", "kq"]
+SM_TRACK_TITLES = {"date": "Ngày", "symbol": "Mã", "close": "Giá vào (close)",
+                   "vol_ratio": "Volume ×TB20", "banker": "MCDX Banker /20",
+                   "foreign_pct": "Khối ngoại % nền",
+                   "prop_pct": "Tự doanh % nền", "breakout": "Trùng KN breakout",
+                   "ret_t1": "T+1 %", "ret_t2": "T+2 %", "ret_t3": "T+3 %",
+                   "ret_t5": "T+5 %", "mfe": "Lãi đỉnh 5 phiên %",
+                   "mae": "Lỗ đáy 5 phiên %", "kq": "Kết quả"}
+sm_track_summary = pn.pane.Markdown("*Chưa có mã dòng tiền nào được ghi nhận.*")
+sm_track_table = pn.widgets.Tabulator(pd.DataFrame(columns=SM_TRACK_COLS), height=320,
+                                      disabled=True, show_index=False, titles=SM_TRACK_TITLES)
+
+
+def _refresh_sm_tracking():
+    """Section 💰: hiệu quả các mã lọt screen Dòng tiền (đo T+n y hệt kênh chấm điểm)."""
+    try:
+        df = db.load_sm_tracking(200)
+    except Exception:
+        return
+    if df is None or df.empty:
+        sm_track_summary.object = ("*Chưa có mã dòng tiền nào được ghi nhận — screen chạy ở "
+                                   "phiên EOD 15:30, kết quả T+3 có sau ~3 phiên.*")
+        sm_track_table.value = pd.DataFrame(columns=SM_TRACK_COLS)
+        return
+    done = df[df["win_t3"].notna()]
+    if len(done):
+        win = 100 * done["win_t3"].mean()
+        sm_track_summary.object = (
+            f"**Đã đủ T+3: {len(done)}** / {len(df)} mã-ngày · win T+3 **{win:.0f}%** · "
+            f"return TB T+3 **{done['ret_t3'].mean():+.2f}%**"
+            + (f" · T+5 **{done['ret_t5'].mean():+.2f}%**" if done["ret_t5"].notna().any() else "")
+            + "  \n<small>Đối chiếu với section kênh chấm điểm phía trên để so hiệu quả "
+              "hai cách chọn mã trên cùng thước đo.</small>")
+    else:
+        sm_track_summary.object = f"*{len(df)} mã-ngày đã ghi nhận, chưa ca nào đủ T+3.*"
+    for c in ("ret_t1", "ret_t2", "ret_t3", "ret_t5", "mfe", "mae", "foreign_pct", "prop_pct"):
+        df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
+    df["vol_ratio"] = pd.to_numeric(df["vol_ratio"], errors="coerce").round(2)
+    df["breakout"] = df["is_breakout_reco"].map({1: "🚀", 0: ""})
+    if "banker" not in df.columns:
+        df["banker"] = None
+    df["banker"] = pd.to_numeric(df["banker"], errors="coerce").round(1)
+    df["kq"] = df["win_t3"].map({1: "✅ Thắng", 0: "❌ Thua"}).fillna("⏳ chờ")
+    sm_track_table.value = df[SM_TRACK_COLS].reset_index(drop=True)
+
+
 tracking_tab = pn.Column(
-    pn.pane.Markdown("### 🎯 Theo dõi & Kiểm chứng khuyến nghị (T+2.5)"),
+    pn.pane.Markdown("### 🎯 Theo dõi & Kiểm chứng (T+2.5)"),
+    pn.pane.Markdown("## 📈 Kênh CHẤM ĐIỂM — khuyến nghị breakout"),
     pn.pane.Markdown("*Mỗi mã được app khuyến nghị (🟢 Mua ngay / 🔵 Sắp breakout) được ghi lại "
                      "với giá lúc khuyến nghị, rồi đo return các phiên sau. **T+3** = phiên bán "
                      "được đầu tiên theo T+2.5 → dùng làm thước đo Thắng/Thua.*",
@@ -534,8 +585,17 @@ tracking_tab = pn.Column(
                      f"— đã kiểm chứng trên backtest 10 năm (07/2026); cơ chế tự học đã gỡ bỏ, "
                      f"thay bằng Drift Alarm khi đủ dữ liệu live.</small>",
                      styles={"color": "#888"}),
-    pn.layout.Divider(),
     track_table,
+    pn.layout.Divider(),
+    pn.pane.Markdown("## 💰 Kênh DÒNG TIỀN THÔNG MINH — quan sát, user tự quyết"),
+    pn.pane.Markdown("*Các mã lọt screen EOD (volume + khối ngoại/tự doanh) được đo T+n "
+                     "**y hệt thước đo** của kênh chấm điểm (cùng giá close ngày lọt, cùng "
+                     "hiệu chỉnh cổ tức) — để hai kênh so được với nhau công bằng. Kênh này "
+                     "KHÔNG phải khuyến nghị; đây là bảng đánh giá xem 'volume + smart money "
+                     "thô' có edge thật không.*",
+                     styles={"font-size": "0.85em", "color": "#666"}),
+    sm_track_summary,
+    sm_track_table,
 )
 
 missed_tab = pn.Column(
@@ -551,10 +611,106 @@ missed_tab = pn.Column(
     miss_table,
 )
 
+SM_COLS = ["date", "symbol", "close", "vol_ratio", "banker", "foreign_net_b", "foreign_pct",
+           "prop_net_b", "prop_pct", "breakout"]
+SM_TITLES = {"date": "Ngày", "symbol": "Mã", "close": "Giá đóng cửa",
+             "vol_ratio": "Volume ×TB20", "banker": "MCDX Banker /20",
+             "foreign_net_b": "Khối ngoại ròng (tỷ)", "foreign_pct": "Khối ngoại % nền",
+             "prop_net_b": "Tự doanh ròng (tỷ)", "prop_pct": "Tự doanh % nền",
+             "breakout": "Trùng KN breakout"}
+sm_table = pn.widgets.Tabulator(pd.DataFrame(columns=SM_COLS), height=340,
+                                disabled=True, show_index=False, titles=SM_TITLES)
+SM_LIVE_COLS = ["symbol", "close", "vol_ratio", "banker", "foreign_net_b", "foreign_pct_proj", "đạt"]
+SM_LIVE_TITLES = {"symbol": "Mã", "close": "Giá", "vol_ratio": "Volume ×TB20 (cùng giờ)",
+                  "banker": "MCDX Banker /20", "foreign_net_b": "Khối ngoại ròng (tỷ)",
+                  "foreign_pct_proj": "Khối ngoại % nền (chiếu cả phiên)", "đạt": "Đạt"}
+sm_live_status = pn.pane.Markdown("*Chưa có dữ liệu trong phiên.*")
+sm_live_table = pn.widgets.Tabulator(pd.DataFrame(columns=SM_LIVE_COLS), height=300,
+                                     disabled=True, show_index=False, titles=SM_LIVE_TITLES)
+
+
+def _refresh_sm_live(s):
+    """Bảng NN live — cập nhật theo store mỗi scan 5' (như Layer-2)."""
+    live = s.get("smart_money_live") or {}
+    rows = live.get("rows") or []
+    if not rows:
+        sm_live_status.object = "*Chưa có dữ liệu trong phiên (chạy từ phút 15 của phiên).*"
+        sm_live_table.value = pd.DataFrame(columns=SM_LIVE_COLS)
+        return
+    sm_live_status.object = (f"Cập nhật **{live.get('ts','—')}** (phút {live.get('minutes','—')}"
+                             f" của phiên) — volume & khối ngoại chiếu theo *cùng khoảng thời "
+                             f"gian*; ✅ = đạt cả hai ngưỡng (sẽ vào tin Telegram giờ kế tiếp).")
+    df = pd.DataFrame(rows)
+    df["foreign_net_b"] = (pd.to_numeric(df["foreign_net"], errors="coerce") / 1e9).round(1)
+    if "banker" not in df.columns:
+        df["banker"] = None
+    if "qualifies_mcdx" not in df.columns:
+        df["qualifies_mcdx"] = False
+    df["đạt"] = [("✅ dòng tiền" if q else "") + (" 📕 MCDX" if qm else "")
+                 for q, qm in zip(df["qualifies"], df["qualifies_mcdx"])]
+    sm_live_table.value = df[SM_LIVE_COLS].reset_index(drop=True)
+
+
+def _refresh_smart_money():
+    try:
+        df = db.load_smart_money_screen(10)
+    except Exception:
+        return
+    if df is None or df.empty:
+        sm_table.value = pd.DataFrame(columns=SM_COLS)
+        return
+    df["foreign_net_b"] = (pd.to_numeric(df["foreign_net"], errors="coerce") / 1e9).round(1)
+    df["prop_net_b"] = (pd.to_numeric(df["prop_net"], errors="coerce") / 1e9).round(1)
+    df["foreign_pct"] = pd.to_numeric(df["foreign_pct"], errors="coerce").round(1)
+    df["prop_pct"] = pd.to_numeric(df["prop_pct"], errors="coerce").round(1)
+    df["vol_ratio"] = pd.to_numeric(df["vol_ratio"], errors="coerce").round(2)
+    df["breakout"] = df["is_breakout_reco"].map({1: "🚀", 0: ""})
+    if "banker" not in df.columns:
+        df["banker"] = None
+    df["banker"] = pd.to_numeric(df["banker"], errors="coerce").round(1)
+    sm_table.value = df[SM_COLS].reset_index(drop=True)
+
+
+smart_money_tab = pn.Column(
+    pn.pane.Markdown("### 💰 Dòng tiền thông minh — kênh quan sát (KHÔNG khuyến nghị)"),
+    pn.pane.Markdown("#### ⚡ Trong phiên — volume & khối ngoại (cập nhật 5 phút/lần)"),
+    pn.pane.Markdown(f"*Liệt kê mã vượt MỘT trong hai ngưỡng (volume ≥{config.SM_VOL_RATIO_MIN}× "
+                     f"cùng-khoảng-thời-gian · khối ngoại chiếu ≥{config.SM_FOREIGN_PCT_MIN:.0f}% "
+                     f"nền GTGD 5 phiên); cột Đạt: ✅ dòng tiền (volume + khối ngoại) · 📕 MCDX "
+                     f"(volume + Banker > {config.SM_MCDX_BANKER_MIN:.0f}) → Telegram theo giờ "
+                     f"(mỗi mã 1 lần/ngày). Tự doanh không có dữ liệu trong phiên. MCDX Banker = "
+                     f"clamp(1.5×(RSI50−50), 0, 20) tính trên ≥300 phiên dữ liệu vnstock đã đồng "
+                     f"nhất hệ điều chỉnh giá — có thể lệch vài điểm so với TradingView tùy thiết "
+                     f"lập điều chỉnh giá và biến thể script MCDX trên chart của bạn.*",
+                     styles={"font-size": "0.85em", "color": "#666"}),
+    sm_live_status,
+    sm_live_table,
+    pn.layout.Divider(),
+    pn.pane.Markdown("#### 🌙 EOD (15:30: volume + khối ngoại cả phiên) · sáng hôm sau 08:45: "
+                     "bản ĐẦY ĐỦ có TỰ DOANH — VCI công bố số ngày D vào sáng D+1 (lưu 10 phiên)"),
+    pn.pane.Markdown(f"*Volume ≥{config.SM_VOL_RATIO_MIN}× TB20 và khối ngoại "
+                     f"≥{config.SM_FOREIGN_PCT_MIN:.0f}% HOẶC tự doanh "
+                     f"≥{config.SM_PROP_PCT_MIN:.0f}% nền GTGD 5 phiên (band 'rất mạnh' "
+                     f"Spec 3.2.4.2 — nâng từ 2%/3% ngày 22/08 theo phân phối thực). Cột "
+                     f"foreign/prop = tỷ VND ròng hôm đó; 🚀 = cùng ngày được kênh breakout "
+                     f"khuyến nghị. Ca mẫu: FRT được khối ngoại gom +119% nền ngay đáy "
+                     f"23/07, 5 phiên trước chuỗi 3 cây trần.*",
+                     styles={"font-size": "0.85em", "color": "#666"}),
+    pn.pane.Markdown("<small>📐 <b>Backtest 2019-26 (12,744 picks, 213 mã)</b>: ngắn hạn T+3 "
+                     "kênh này ≈ trung bình pool (không có edge chọn mã); giá trị thật nằm ở "
+                     "(1) thị trường GẤU — picks +0.1% khi pool −0.2%, (2) khung T+10 — hơn "
+                     "pool +0.6-1.0đ%, (3) khối ngoại 10-20% nền tốt hơn >20% (số cực lớn "
+                     "thường là giao dịch thỏa thuận, không phải gom). Mua đuổi hôm sau mất "
+                     "gần hết edge T+3. Dùng như radar chú ý, không phải máy chọn mã.</small>",
+                     styles={"color": "#888"}),
+    sm_table,
+)
+
 tabs = pn.Tabs(("📋 Layer 1 — Lọc thô", layer1_tab),
                ("🏆 Layer 2 — Chấm điểm", layer2_tab),
                ("🎯 Theo dõi — Kiểm chứng", tracking_tab),
-               ("📊 Bỏ sót — Toàn pool", missed_tab))
+               ("📊 Bỏ sót — Toàn pool", missed_tab),
+               ("💰 Dòng tiền", smart_money_tab))
 
 main = pn.Column(regime_pane, status_pane, tabs)
 
