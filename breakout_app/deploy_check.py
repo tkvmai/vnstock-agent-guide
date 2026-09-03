@@ -46,7 +46,15 @@ try:
     check(f"vnstock_data {version('vnstock_data')} (sponsored)", True)
 except Exception:
     check("vnstock_data (sponsored)", False,
-          "Cài qua vnstock-installer với license Golden — xem DEPLOY.md bước 3")
+          "Cài qua script headless: python sponsored_install.py — xem DEPLOY.md bước 3")
+try:
+    from importlib.metadata import version as _v
+    check(f"vnii {_v('vnii')} (mở khóa rate-limit sponsor)", True)
+except Exception:
+    check("vnii (mở khóa rate-limit sponsor)", False,
+          "THIẾU vnii → runtime bị coi là FREE 60 req/phút dù license golden! Cài: "
+          "pip install --extra-index-url https://vnstocks.com/api/simple vnii "
+          "(hoặc python sponsored_install.py vnii)")
 
 # 4. License tier
 auth = os.path.join(os.path.expanduser("~"), ".vnstock", "auth_state.json")
