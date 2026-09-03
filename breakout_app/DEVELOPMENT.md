@@ -1003,6 +1003,15 @@ Restarting: Ctrl+C the server, re-run `run.py`, hard-refresh the browser (Ctrl+F
     *.log, *.pine, sm_screen_picks), read-only Deploy key for private-repo pulls, separate
     Actions SSH keypair stored as repo secrets (DEPLOY_HOST/USER/SSH_KEY/PORT).
 
+62. **sync_db.py — review workflow after the server move (user 03/09).** The loss/miss
+    review workflows run in local Claude Code sessions and both READ outcomes and WRITE
+    the review registries; with the production db now on the server, local data goes
+    stale. `sync_db.py pull` takes a CONSISTENT server snapshot (sqlite backup API via
+    ssh, not a raw copy of a live db) and replaces the local db (after a .pre-pull
+    backup); `sync_db.py push` upserts only `loss_reviews` + `miss_reviews` back
+    (INSERT OR REPLACE — conflict-free because the server app never writes those
+    tables). Review protocol is now: pull → review → push. SSH via the `maitt` alias.
+
 ## Telegram alert setup (user-supplied credentials)
 
 1. Create a bot with @BotFather → get the **bot token**.
