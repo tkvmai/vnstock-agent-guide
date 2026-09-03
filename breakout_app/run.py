@@ -70,6 +70,10 @@ def _install_forensics():
 def main():
     parser = argparse.ArgumentParser(description="Breakout Screener dashboard")
     parser.add_argument("--port", type=int, default=5006)
+    parser.add_argument("--websocket-origin", action="append", default=None,
+                        help="domain được phép mở websocket (bắt buộc khi chạy sau "
+                             "reverse-proxy, vd: screener.mobilecontent4u8.com); "
+                             "lặp lại flag để thêm nhiều domain")
     parser.add_argument("--no-show", action="store_true", help="don't open a browser")
     parser.add_argument("--no-scheduler", action="store_true",
                         help="serve UI only, without the background scan loop")
@@ -84,8 +88,10 @@ def main():
     from app import template
 
     try:
+        ws = args.websocket_origin or ["localhost:" + str(args.port)]
         pn.serve(template, port=args.port, show=not args.no_show,
-                 title="Breakout Screener", autoreload=False)
+                 title="Breakout Screener", autoreload=False,
+                 websocket_origin=ws)
         _trace("pn.serve RETURNED normally — Tornado loop stopped without exception")
     except BaseException as e:
         _trace(f"pn.serve raised {type(e).__name__}: {e}\n" + traceback.format_exc())
