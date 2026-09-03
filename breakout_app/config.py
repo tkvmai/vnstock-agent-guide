@@ -63,6 +63,12 @@ SM_INTRADAY_MIN_MINUTES = 60   # chỉ check sau ~10:15 (phép chiếu volume �
 SM_MCDX_ENABLED = True
 SM_MCDX_BANKER_MIN = 0.0       # > 0 = RSI50 vừa vượt 50; nâng 10 nếu muốn ít tin hơn
 
+# Tự NHẮC cập nhật thư viện (04/09/2026): thứ Hai hàng tuần so version đang cài với bản
+# mới nhất (PyPI + kho vnstocks.com) → Telegram MỘT LẦN cho mỗi tổ hợp version mới.
+# KHÔNG bao giờ tự cập nhật — version ghim trong requirements.txt là chủ đích (an toàn
+# production); nâng cấp = sửa requirements + push (public) / sponsored_install.py (sponsored).
+LIB_UPDATE_CHECK_ENABLED = True
+
 # ── Market Health gating (Phase 2, backtest-passed 19/07/2026) ─────────────────────
 # GRAD X=55 trên 10 năm: TRAIN obj −0.019→+0.018, VALIDATION −1.115→−1.009 (cổng PASS,
 # ngưỡng chọn trên train, validation chưa từng dùng để chọn). Đèn vàng 3 mức:

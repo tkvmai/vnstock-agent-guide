@@ -745,6 +745,78 @@ def _sm_morning_final():
         _log(f"sm-morning-final ERROR: {type(e).__name__}: {e}")
 
 
+def _latest_pypi(pkg: str):
+    """Version mới nhất trên PyPI (None nếu lỗi mạng)."""
+    import json as _json
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"https://pypi.org/pypi/{pkg}/json", timeout=15) as r:
+            return _json.load(r)["info"]["version"]
+    except Exception:
+        return None
+
+
+def _latest_vnstocks_index(pkg: str):
+    """Version mới nhất trên kho riêng vnstocks.com (PEP503 simple index)."""
+    import re as _re
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"https://vnstocks.com/api/simple/{pkg}/", timeout=15) as r:
+            html = r.read().decode("utf-8", "replace")
+        vers = _re.findall(rf"{pkg.replace('-', '[-_]')}-(\d+(?:\.\d+)+)", html)
+        if not vers:
+            return None
+        return max(vers, key=lambda v: tuple(int(x) for x in v.split(".")))
+    except Exception:
+        return None
+
+
+def _lib_update_check():
+    """Thứ Hai hàng tuần: so version thư viện đang cài với bản mới nhất → Telegram
+    MỘT LẦN cho mỗi tổ hợp mới. CHỈ NHẮC, không bao giờ tự cập nhật (version ghim
+    là chủ đích — nâng cấp qua requirements.txt/push hoặc sponsored_install.py)."""
+    try:
+        if not config.LIB_UPDATE_CHECK_ENABLED:
+            return
+        from importlib.metadata import version as _v
+        checks = []
+        # vnstock_data không có trên index pip (chỉ tarball qua installer) → check
+        # trả None và bị bỏ qua; bản mới của nó tự đến khi chạy sponsored_install.py.
+        for pkg, fetch in (("vnstock", _latest_pypi),
+                           ("vnstock_data", _latest_vnstocks_index),
+                           ("vnii", _latest_vnstocks_index)):
+            try:
+                cur = _v(pkg)
+            except Exception:
+                continue
+            latest = fetch(pkg)
+            if latest and latest != cur:
+                try:
+                    newer = (tuple(int(x) for x in latest.split("."))
+                             > tuple(int(x) for x in cur.split(".")))
+                except ValueError:
+                    newer = True
+                if newer:
+                    checks.append((pkg, cur, latest))
+        if not checks:
+            _log("lib-update: tất cả thư viện đang ở bản mới nhất")
+            return
+        sig = ";".join(f"{p}:{l}" for p, _, l in checks)
+        if db.get_state("lib_update_notified") == sig:
+            return                                   # tổ hợp này đã nhắc rồi
+        lines = ["🔄 <b>Có bản cập nhật thư viện vnstock</b> (app KHÔNG tự cập nhật)", ""]
+        for pkg, cur, latest in checks:
+            lines.append(f"• {pkg}: {cur} → <b>{latest}</b>")
+        lines += ["", "<i>Nâng cấp có chủ đích: gói public sửa requirements.txt rồi push "
+                      "(auto-deploy lo phần còn lại); gói sponsored chạy sponsored_install.py "
+                      "trên server. Nên thử ở máy dev + chạy test trước khi push.</i>"]
+        notify.send_telegram(chr(10).join(lines))
+        db.set_state("lib_update_notified", sig)
+        _log(f"lib-update: đã nhắc {sig}")
+    except Exception as e:
+        _log(f"lib-update ERROR: {type(e).__name__}: {e}")
+
+
 def _refresh_dividends():
     """Nạp lịch cổ tức tiền mặt MỘT LẦN/NGÀY (events() trả cả lịch sử nên đủ).
 
@@ -1181,6 +1253,8 @@ def start_scheduler(initial_scan: bool = True):
     # Bản đầy đủ dòng tiền phiên hôm trước (NN+TD chính thức) — 2 lượt đề phòng API trễ
     schedule.every().day.at("08:45").do(_sm_morning_final)
     schedule.every().day.at("11:45").do(_sm_morning_final)
+    # Nhắc cập nhật thư viện — thứ Hai hàng tuần, chỉ thông báo (xem _lib_update_check)
+    schedule.every().monday.at("08:15").do(_lib_update_check)
     schedule.every(5).minutes.do(_intraday_job)
     schedule.every().day.at("15:30").do(_eod_job)
     # Hourly Telegram alert of top new Layer-2 stocks, ALERT_START_HOUR..END_HOUR.

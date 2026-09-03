@@ -270,3 +270,24 @@ Kiểm trên kho backtest: PRE-lặp (≥2 phiên liền trước) ở TRAIN l�
 luật. Cùng số phận với P8 breakout-lặp. 👁 giữ theo dõi nhóm PRE-lặp trong dữ liệu live.
 
 **Không sửa công thức.** Registry sạch: unreviewed = 0.
+
+---
+
+## Đợt review 04/09/2026 — 31 ca (24-26/08): hụt đà sau phiên bùng nổ + vắt nghỉ lễ 2/9
+
+**Đợt đầu tiên theo quy trình mới sau khi app lên server** (sync_db pull → review → push).
+
+**Khung:** index bùng nổ 26/08 (+1.67% lên 1,821, health 100) → 3 phiên sau đi ngang→đỏ nhẹ
+(+0.56/+0.03/−0.24), và cửa sổ T+3 của lứa 25-26/08 **vắt qua kỳ nghỉ Quốc khánh 4 ngày**
+(29/08-02/09); phiên tái mở 03/09 chốt lời nhẹ.
+
+- **17 ca `nhiễu_hoà_vốn`** — lứa 24-25/08 tổng thể DƯƠNG (win 20/40 và 19/29, TB +0.36%/+1.18%).
+- **14 ca `khác` — hụt đà sau bùng nổ:** gần trọn cohort 26/08 (9/29 thắng, TB −0.53%) — mua
+  đúng phiên breakout đồng loạt rồi đà khựng; pool cùng ngày −0.45%/win 34% → recos ≈ pool,
+  rủi ro thị trường không phải lỗi setup. Nặng nhất: TCX −4.7 (tái-KN sau ngày hoà vốn),
+  DGC ×2 (−4.3/−4.3, MAE −5.5) — lặp-lại-mã-thua, luật cấm đã kiểm & BÁC (27/08).
+
+**Pattern mới ghi 👁 — P12 `vắt_kỳ_nghỉ_dài`:** KN ngay trước nghỉ lễ nhiều ngày = T+2.5
+lock + phơi nhiễm sự kiện dài bất thường (lứa này ôm hàng 6 ngày lịch thay vì 3). Mới 1 lần
+quan sát — chưa hành động; nếu lặp (lễ 30/4, Tết…) cân nhắc cảnh báo "⚠️ sắp nghỉ lễ dài"
+trên alert (tầng hiển thị, như run-up warning). Registry sạch: unreviewed = 0.

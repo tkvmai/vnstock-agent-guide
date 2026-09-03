@@ -1012,6 +1012,16 @@ Restarting: Ctrl+C the server, re-run `run.py`, hard-refresh the browser (Ctrl+F
     (INSERT OR REPLACE — conflict-free because the server app never writes those
     tables). Review protocol is now: pull → review → push. SSH via the `maitt` alias.
 
+63. **Weekly library-update NOTIFIER (user 04/09: "app có tự cập nhật không?").** Answer
+    codified: the app never auto-updates (pinned requirements are deliberate production
+    safety — this codebase has eaten enough silent provider changes), but it now NOTIFIES:
+    `_lib_update_check` every Monday 08:15 compares installed versions vs latest (vnstock
+    via PyPI JSON; vnii via the vnstocks.com PEP503 index; vnstock_data is tarball-only so
+    it's skipped — its updates arrive whenever sponsored_install.py is re-run) and sends
+    ONE Telegram per new version-combination (app_state `lib_update_notified` dedup).
+    Message spells out the deliberate upgrade paths. Live dry-run caught real gaps
+    (vnstock 4.0.2→4.0.7, vnii 0.2.4→0.2.5). Knob `LIB_UPDATE_CHECK_ENABLED`. 17/17 tests.
+
 ## Telegram alert setup (user-supplied credentials)
 
 1. Create a bot with @BotFather → get the **bot token**.
