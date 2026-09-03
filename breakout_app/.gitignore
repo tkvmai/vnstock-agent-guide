@@ -13,3 +13,4 @@ data/flow_history/
 data/backtest/sm_screen_picks.parquet
 data/*.log
 data/*.pine
+data/*.pre-pull
