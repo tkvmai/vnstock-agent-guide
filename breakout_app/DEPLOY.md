@@ -40,17 +40,21 @@ pip install -r requirements.txt
 
 ## 3. Gói SPONSORED (vnstock_data) — bước dễ vướng nhất
 
-`vnstock_data` **không cài được bằng pip thường** — nó phân phối qua installer với license.
-Trên server (trong venv đã activate):
+`vnstock_data` **không cài được bằng pip thường** — phân phối qua vnstock-installer với
+license. Installer chính chủ là WEB UI (khó dùng trên server headless) → dùng script
+headless kèm repo. Hai bước:
 
+**(a) Copy hồ sơ license từ máy đã kích hoạt** (Windows PowerShell):
 ```bash
-python -c "from vnstock_installer import setup; setup()"   # đăng nhập license Golden của bạn
+scp -r C:\Users\tkvmai\.vnstock maitt:~/
 ```
 
-(Installer sẽ hỏi đăng nhập/kích hoạt — dùng đúng tài khoản Golden `maitrant@gmail.com`;
-sau khi xong sẽ có `~/.vnstock/auth_state.json` với `"tier": "golden"`. Nếu lệnh trên
-không đúng với phiên bản installer của bạn, xem hướng dẫn tại vnstocks.com — mục cài đặt
-gói sponsored; hoặc hỏi mình kèm thông báo lỗi.)
+**(b) Chạy script cài headless** (trong venv đã activate):
+```bash
+python sponsored_install.py          # đăng ký thiết bị + tải và cài vnstock_data
+```
+Script dùng đúng API của vnstock-installer (đăng ký device → tải gói theo license →
+cài vào venv). Lỗi thì dán nguyên output lên hỏi.
 
 > Lưu ý license theo MÁY: kích hoạt trên server không ảnh hưởng máy cũ, nhưng nếu gói của
 > bạn giới hạn số máy thì có thể phải gỡ bớt thiết bị trong trang quản lý tài khoản.
