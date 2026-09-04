@@ -40,6 +40,12 @@ def _chat_ids():
     return [str(c).strip() for c in raw if str(c).strip()]
 
 
+# Kill switch cho môi trường dev (04/09): run.py --no-telegram đặt cờ này (hoặc env
+# BREAKOUT_NO_TELEGRAM=1) → mọi tin bị chặn tại đây, in preview ra console thay vì gửi.
+# Sinh ra từ sự cố tin đôi 10:00 04/09 (app Windows quên tắt chạy song song server).
+DISABLED = os.environ.get("BREAKOUT_NO_TELEGRAM") == "1"
+
+
 def is_configured() -> bool:
     return bool(_token() and _chat_ids())
 
@@ -63,6 +69,10 @@ def _send_one(tok: str, chat_id: str, text: str) -> bool:
 
 
 def send_telegram(text: str) -> bool:
+    if DISABLED or os.environ.get("BREAKOUT_NO_TELEGRAM") == "1":
+        preview = text.replace(chr(10), " | ")[:200]
+        print(f"[notify] --no-telegram: CHẶN tin ({len(text)} ký tự): {preview}…")
+        return False
     """Send an HTML message to every configured chat. Returns True if at least
     one delivery succeeded."""
     tok = _token()

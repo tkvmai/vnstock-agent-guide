@@ -75,12 +75,19 @@ def main():
                              "reverse-proxy, vd: screener.mobilecontent4u8.com); "
                              "lặp lại flag để thêm nhiều domain")
     parser.add_argument("--no-show", action="store_true", help="don't open a browser")
+    parser.add_argument("--no-telegram", action="store_true",
+                        help="chạy dev: CHẶN mọi tin Telegram (in preview ra console) — "
+                             "dùng khi thử app ở máy local song song với server production")
     parser.add_argument("--no-scheduler", action="store_true",
                         help="serve UI only, without the background scan loop")
     args = parser.parse_args()
 
     _install_forensics()
     db.init_db()
+    if args.no_telegram:
+        import notify
+        notify.DISABLED = True
+        print("⚠️  --no-telegram: mọi tin Telegram bị chặn (chỉ in preview ra console)")
     if not args.no_scheduler:
         scheduler.start_scheduler()
 
