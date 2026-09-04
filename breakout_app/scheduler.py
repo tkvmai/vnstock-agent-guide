@@ -68,6 +68,24 @@ def ensure_history(exchanges=None, min_gtgd20: float = None, min_price: float = 
     universe = fetchers.fetch_universe(exchanges, min_gtgd20=exact_gtgd20)
     symbols = universe["symbol"].tolist()
     _log(f"universe = {len(symbols)} symbols")
+    # Guard universe SỤP ĐỔ (04/09: API screener trả 11 mã lúc 08:00 rồi bị cache cả
+    # ngày → dashboard trống, không alert): fetch < 50% baseline → thử lại 1 lần;
+    # vẫn cụt → RAISE để scan này fail và scan sau (5') tự thử lại — KHÔNG cache sig.
+    try:
+        baseline = int(float(db.get_state("universe_size") or 0))
+    except (TypeError, ValueError):
+        baseline = 0
+    if baseline >= 50 and len(symbols) < 0.5 * baseline:
+        _log(f"universe SỤP ({len(symbols)} vs baseline {baseline}) — thử lại…")
+        universe = fetchers.fetch_universe(exchanges, min_gtgd20=exact_gtgd20)
+        symbols = universe["symbol"].tolist()
+        _log(f"universe (retry) = {len(symbols)} symbols")
+        if len(symbols) < 0.5 * baseline:
+            raise RuntimeError(
+                f"universe sụp đổ ({len(symbols)}/{baseline}) — API screener trả tập "
+                f"con; bỏ scan này, scan sau tự thử lại")
+    if len(symbols) >= 50:
+        db.set_state("universe_size", len(symbols))
 
     tag = today
     if not ohlcv and cache.has_bundle(tag) and not force:
